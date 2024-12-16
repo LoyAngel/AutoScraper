@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup,NavigableString,Tag,Comment
-from copy import deepcopy
+from copy import copy
 from utils.html_utils import *
 
 def calculate_dom_depth(element, depth=0):
@@ -19,16 +19,26 @@ def calculate_dom_depth(element, depth=0):
 
 
 def domlm_parse(soup:Tag, max_len):
+    """
+    Parse the DOM tree to get the subtree with a maximum number of tokens.
+    Args:
+    - soup: BeautifulSoup object to parse.
+    - max_len: Maximum number of tokens to keep in the subtree.
+
+    Returns:
+    - List of strings representing the subtree.
+    """
     subtree = []
     while True:
         delete = False
-        dup_soup = deepcopy(soup)
+        dup_soup = copy(soup)
         descendants = list(dup_soup.descendants)
         for ele in reversed(descendants):
             if isinstance(ele, Tag):
                 #print(len(str(dup_soup)))
                 # if len(str(dup_soup)) > max_len: 
-                if num_tokens_from_string(str(dup_soup), "cl100k_base") > max_len:
+                token_num = num_tokens_from_string(str(dup_soup), "cl100k_base")
+                if token_num > max_len:
                     ele.decompose()
                     delete = True
                 else:
@@ -57,7 +67,7 @@ def domlm_parse(soup:Tag, max_len):
     return subtree
 
 if __name__ == '__main__':
-    from html_utils import simplify_html
+    from html_utils import *
     html_content = """<html>
 <body>
     <div>
@@ -82,13 +92,13 @@ if __name__ == '__main__':
         </ul>
     </div>
     <ul>
-            <p>Keep this paragraph</p>
-            <p>Delete this paragraph</p>
-        </ul>
-        <ul>
-            <li>Delete this item</li>
-            <li>Delete this item too</li>
-        </ul>
+        <p>Keep this paragraph</p>
+        <p>Delete this paragraph</p>
+    </ul>
+    <ul>
+        <li>Delete this item</li>
+        <li>Delete this item too</li>
+    </ul>
 </body>
 </html>
     """

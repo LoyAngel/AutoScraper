@@ -5,7 +5,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler'], help='Which type of crawler generation agent to use.')
+parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
 
 SCHEMA = {
@@ -25,12 +25,12 @@ print(args)
 PATTERN = args.pattern
 model = args.model
 
-GROUND_TRUTH_HOME = '/mnt/data122/harryhuang/swde/sourceCode/groundtruth'
+GROUND_TRUTH_HOME = 'data/swde/sourceCode/groundtruth'
 OUTPUT_HOME = f'dataset/swde/{model}/{PATTERN}'
 
 def load_file(filename):
     result_dict = {}
-    with open(filename, 'r') as f:
+    with open(filename, 'r', encoding='utf8') as f:
         for index, line in enumerate(f.readlines()):
             if index <= 1: 
                 continue
@@ -89,7 +89,10 @@ result_summary = {
 for field in SCHEMA.keys():
     result_dict[field] = {}
     result_overall[field] = {}
-    for website_path in glob.glob(os.path.join(OUTPUT_HOME, field, '*')):
+    weblist = glob.glob(os.path.join(OUTPUT_HOME, field, '*'))
+    weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
+
+    for website_path in weblist:
         if f'_{PATTERN}.json' in website_path:
             continue
         # if f'_rule' in website_path:
@@ -102,7 +105,7 @@ for field in SCHEMA.keys():
             filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}-{item}.txt')
             ground_truth[item] = load_file(filename)
         
-        with open(website_path, 'r') as f:
+        with open(website_path, 'r', encoding='utf8') as f:
             predict_result = json.load(f)
         #print(predict_result)
         tp = defaultdict(int)
@@ -110,7 +113,8 @@ for field in SCHEMA.keys():
         fp = defaultdict(int)
 
         for result in predict_result:
-            page_index = result['page'].split('/')[-1].replace('.htm', '')
+            # page_index = result['page'].split('/')[-1].replace('.htm', '')
+            page_index = result['page'].split('\\')[-1].replace('.htm', '')
             result_dict[field][website_name][page_index] = {}
             for item in SCHEMA[field]:
                 #print(result)
@@ -160,11 +164,11 @@ for key in result_summary.keys():
         result_summary[key] = round(result_summary[key] / result_summary['Total'], 4)
 
 print(json.dumps(result_summary, indent=4))
-with open(os.path.join(OUTPUT_HOME, 'result.json'), 'w') as f:
+with open(os.path.join(OUTPUT_HOME, 'result.json'), 'w', encoding='utf8') as f:
     json.dump(result_dict, f, ensure_ascii=False, indent=4)
 
-with open(os.path.join(OUTPUT_HOME, 'result_overall.json'), 'w') as f:
+with open(os.path.join(OUTPUT_HOME, 'result_overall.json'), 'w', encoding='utf8') as f:
     json.dump(result_overall, f, ensure_ascii=False, indent=4)
 
-with open(os.path.join(OUTPUT_HOME, 'result_summary.json'), 'w') as f:
+with open(os.path.join(OUTPUT_HOME, 'result_summary.json'), 'w', encoding='utf8') as f:
     json.dump(result_summary, f, ensure_ascii=False, indent=4)

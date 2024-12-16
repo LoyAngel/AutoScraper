@@ -1,23 +1,22 @@
-import openai
-from openai import OpenAI
 import httpx
+import logging
+# from utils.html_utils import num_tokens_from_string
 
-OPENAI_API_KEY=''
-client = OpenAI(api_key=OPENAI_API_KEY)
+LLAMA_POST_URL = 'http://127.0.0.1:9999/predict/'
 
-def chatgpt(query):
-    query_session = [{"role":"user", "content": query}]
-    resp = client.chat.completions.create(
-        model='gpt-4-1106-preview',
-        messages=query_session,
-        temperature=0.1,
-        max_tokens=512,
-        top_p=1,
-        frequency_penalty=0.0,
-        presence_penalty=0.0,
+
+def logging_setup():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler("logs.log"),
+        ]
     )
-    ret = resp.choices[0].message.content
-    return ret
+
+logging_setup()
+
 
 if __name__ == '__main__':
-    print((chatgpt('怎么用python代码计算第100个质数？')))
+    # print(llama3(TEXT))
+    pass

@@ -1,7 +1,7 @@
 python crawler_generation.py \
     --pattern autocrawler \
     --dataset swde \
-    --model ChatGPT \
+    --model llama3 \
     --seed_website 5 \
     --save_name ChatGPT_five \
     --overwrite True \
@@ -30,3 +30,10 @@ python crawler_extraction.py \
     --model GPT4
 
 python run_klarna/evaluate.py --pattern autocrawler --model ChatGPT_5
+
+
+nohup python -u crawler_generation.py --pattern autocrawler --dataset swde --model GPT4mini --seed_website 3 --overwrite False --max_token 30000 > crawler.log 2>&1 &
+
+python crawler_extraction.py  --pattern autocrawler --dataset swde --model GPT4mini --overwrite True
+
+python run_swde/evaluate.py --pattern autocrawler --model GPT4mini

@@ -4,19 +4,19 @@ from tqdm import tqdm
 from utils.html_utils import *
 from module.stepback_crawler import StepbackCrawler
 from module.reflexion_crawler import AutoCrawler
+from module.stepback_extra_crawler import StepbackExtraCrawler
 from module.prompt import *
 
-from utils.ms_api_copy import ms_chatgpt as chatgpt
 import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler'], help='Which type of crawler generation agent to use.')
+parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
 parser.add_argument('--dataset', type=str, choices=['swde','ds1','extended_swde','klarna'], help='Which dataset to test.')
 parser.add_argument('--seed_website', type=int)
 parser.add_argument('--save_name', type=str)
-parser.add_argument('--overwrite', type=bool, help='Whether overwrite the generated crawler.')
+parser.add_argument('--overwrite', type=str, help='Whether overwrite the generated crawler.')
 
 args = parser.parse_args()
 print(args)
@@ -25,19 +25,17 @@ PATTERN = args.pattern
 model = args.model
 dataset = args.dataset
 num_seed_website = args.seed_website
-overwrite = args.overwrite
+overwrite = eval(args.overwrite)
 
-if model == 'GPT4':
-    from utils.api import chatgpt
-    from utils.ms_api_copy import ms_gpt4 as chatgpt
-elif model == 'ChatGPT':
-    from utils.ms_api_copy import ms_chatgpt as chatgpt
 
 if PATTERN == 'autocrawler':
-    xe = StepbackCrawler(api=chatgpt)
+    xe = StepbackCrawler(api='None')
+    extract = xe.extract_with_sequence
+elif PATTERN == 'autocrawler_extra':
+    xe = StepbackExtraCrawler(api='None')
     extract = xe.extract_with_sequence
 else:
-    xe = AutoCrawler(PATTERN, api=chatgpt)
+    xe = AutoCrawler(PATTERN, api='None')
     extract = xe.extract_with_xpath
 
 if dataset == 'swde':
@@ -91,10 +89,6 @@ else:
     OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
 for field in SCHEMA.keys():
-    tmp_out = f'dataset/{dataset}/ChatGPT_2/{PATTERN}'
-    if not os.path.exists(os.path.join(tmp_out, field)):
-        os.makedirs(os.path.join(tmp_out, field))
-
     if not os.path.exists(os.path.join(OUTPUT_HOME, field)):
         os.makedirs(os.path.join(OUTPUT_HOME, field))
 
@@ -111,6 +105,8 @@ for field in SCHEMA.keys():
     elif dataset == 'klarna':
         weblist = glob.glob(os.path.join(DATA_HOME, '*'))
 
+    weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
+
     for website_path in weblist:
         if dataset in ['extended_swde', 'swde']:
             website_name = website_path.split('/')[-1].split('(')[0]
@@ -119,11 +115,6 @@ for field in SCHEMA.keys():
         elif dataset == 'klarna':
             website_name = website_path.split('/')[-1]
         
-        print(website_name)
-
-        if os.path.exists(os.path.join(tmp_out, field, website_name) + '.json') and (not overwrite):
-            continue
-
         if os.path.exists(os.path.join(OUTPUT_HOME, field, website_name) + '.json') and (not overwrite):
             continue
         
@@ -137,6 +128,7 @@ for field in SCHEMA.keys():
         # Rule execution
         result_list = []
         
+        print(website_name)
         # web_index = webpage.split('/')[-1].replace('.htm','')
         if dataset in ['swde', 'extended_swde']:
             webpage_list = glob.glob(os.path.join(website_path, '*'))
@@ -144,15 +136,14 @@ for field in SCHEMA.keys():
             for webpage in tqdm(webpage_list[:100]):
                 web_index = webpage.split('/')[-1].replace('.htm','')
 
-                with open(webpage, 'r', errors='ignore') as f:
+                with open(webpage, 'r', errors='ignore', encoding="utf8") as f:
                     html = f.read()
                 
                 new_res = {'page': web_index}
                 for item in SCHEMA[field]:
-                    item_value = extract(html, xpath_rule[item][0])
+                    item_value = extract(html, xpath_rule[item])
                     new_res[item] = item_value
 
-                    #print(item, item_value)
                 result_list.append(new_res)
         elif dataset == 'ds1':
             with open(website_path, 'r', errors='ignore') as f:
@@ -179,7 +170,6 @@ for field in SCHEMA.keys():
                     #print(item, item_value)
                 result_list.append(new_res)
 
-        with open(os.path.join(tmp_out, field, website_name) + '.json', 'w') as f:
-        # with open(os.path.join(OUTPUT_HOME, field, website_name) + '.json', 'w') as f:
+        # with open(os.path.join(tmp_out, field, website_name) + '.json', 'w', encoding="utf8") as f:
+        with open(os.path.join(OUTPUT_HOME, field, website_name) + '.json', 'w', encoding='utf8') as f:
             json.dump(result_list, f, indent=4)
-    
