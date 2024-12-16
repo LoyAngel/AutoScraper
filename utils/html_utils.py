@@ -5,6 +5,7 @@ from lxml import etree
 from lxml.etree import _Element
 import bs4
 import tiktoken
+import difflib
 
 class StepTree:
     def __init__(self, html, step_len = 5000, len_func = len):
@@ -23,15 +24,15 @@ def find_common_ancestor(html_content:str, xpath:str):
         xpath = xpath.replace('::text()','::*')
         xpath = xpath.replace('/text()','/*')
         nodes = tree.xpath(xpath)
-        # 获取每个节点的所有祖先节点
+        # get the ancestors of each node
         ancestors_list = [set(n.xpath('ancestor::*')) for n in nodes]
 
         if not ancestors_list:
             return html_content
-        # 找到所有祖先集合的交集，即共同祖先
+        # find the common ancestors
         common_ancestors = set.intersection(*ancestors_list)
 
-        # 选择最近的共同祖先（即最后一个共同祖先）
+        # choose the nearest common ancestor (the one with the longest path)
         nearest_common_ancestor = max(common_ancestors, key=lambda x: x.getroottree().getpath(x).count('/'))
         ancestor_string = etree.tostring(nearest_common_ancestor, pretty_print=True, encoding='unicode')
         return ancestor_string
@@ -78,6 +79,8 @@ def simplify_html(html, reserve_attrs = ['class']):
         element.extract()
     [s.extract() for s in soup('script')]
     [s.extract() for s in soup('style')]
+    [s.extract() for s in soup('img')]
+    [s.extract() for s in soup('input')]
     for tag in soup.find_all():
         try:
             new_attrs = {}
@@ -88,6 +91,9 @@ def simplify_html(html, reserve_attrs = ['class']):
         except:
             pass
     html = str(soup)
+    
+    html = '\n'.join([line for line in html.split('\n') if line.strip() != ''])
+
     return html
 
 def parse_accessibility_tree(html, indent='\t'):
@@ -109,6 +115,63 @@ def num_tokens_from_string(string: str, encoding_name: str) -> int:
     #print(string)
     num_tokens = len(encoding.encode(string))
     return num_tokens
+
+def get_pure_text(html):
+    soup = BeautifulSoup(html, 'html.parser')
+    text = soup.get_text().replace('\t',' ')
+    text = '\n'.join([line for line in text.split('\n') if line.strip() != ''])
+    text = ' '.join([line for line in text.split(' ') if line.strip() != ''])
+    return text
+
+def html_element_text_similarity_cal(text, html):
+    LEVEL_NUM = 3 # the number of ancestor levels to consider
+    COMBINED_NUM = 3 
+    def similarity_cal(text1, text2) -> float:
+        # calculate the similarity between two strings
+        seq = difflib.SequenceMatcher(None, text1, text2)
+        return seq.ratio()
+    
+    if text == "":
+        return html
+
+
+    # extract the text of each element in the html, excluding the text of its children
+    element_texts = []
+    tree = etree.HTML(html)
+    for element in tree.iter():
+        if element.text:
+            element_texts.append(element.text)
+        if element.tail:
+            element_texts.append(element.tail)
+    
+    # calculate the similarity between the given text and the text of each element 
+    similarities = [similarity_cal(text, element_text) for element_text in element_texts]
+    sorted_similarities = sorted(similarities, reverse=True)
+
+    combined_html = ""
+    for index in range(COMBINED_NUM):
+        similar_element_text = element_texts[similarities.index(sorted_similarities[index])]
+        try:
+            print(f'similar_element{index}:{similar_element_text}')
+        except:
+            pass
+        # find the common ancestor of the most similar element
+        soup = BeautifulSoup(html, 'html.parser')
+        element = soup.find(string=similar_element_text)
+        
+        # element's N-level ancestor
+        ancestor = element
+        if ancestor:
+            for _ in range(LEVEL_NUM):
+                if ancestor.parent:
+                    ancestor = ancestor.parent
+                else:
+                    break
+        
+        combined_html += str(ancestor)
+    
+    return combined_html
+
 
 if __name__ == '__main__':
     import requests
