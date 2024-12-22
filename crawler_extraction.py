@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
-parser.add_argument('--dataset', type=str, choices=['swde','ds1','extended_swde','klarna'], help='Which dataset to test.')
+parser.add_argument('--dataset', type=str, choices=['swde','ds1','ex_swde','klarna'], help='Which dataset to test.')
 parser.add_argument('--seed_website', type=int)
 parser.add_argument('--save_name', type=str)
 parser.add_argument('--overwrite', type=str, help='Whether overwrite the generated crawler.')
@@ -26,7 +26,18 @@ model = args.model
 dataset = args.dataset
 num_seed_website = args.seed_website
 overwrite = eval(args.overwrite)
+if args.save_name:
+    OUTPUT_HOME = f'dataset/{dataset}/{args.save_name}/{PATTERN}'
+else:
+    OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
+# PATTERN = 'autocrawler'
+# model = 'GPT4mini'
+# dataset = 'ex_swde'
+# num_seed_website = 3
+# overwrite = False
+# max_token = 8000
+# OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
 if PATTERN == 'autocrawler':
     xe = StepbackCrawler(api='None')
@@ -51,9 +62,6 @@ if dataset == 'swde':
         'university': ['name', 'phone', 'website', 'type']
     }
     DATA_HOME = 'data/swde/sourceCode'
-    # if model == 'ChatGPT':
-    #     filter_website = ['book-amazon', 'camera-onsale', 'camera-jr', 'camera-compsource', 'camera-buy', 'movie-metacritic', 'movie-rottentomatoes', 'nbaplayer-wiki', 'university-collegenavigator', 'university-matchcollege']
-    # else:
     filter_website = []
 elif dataset == 'ds1':
     from run_ds1.task_prompt import ds1_prompt as prompt
@@ -68,13 +76,10 @@ elif dataset == 'ds1':
         filter_website = ['shoppings_bestbuy', 'shoppings_pcworld', 'shoppings_uttings', 'shoppings_amazoncouk', 'shoppings_tesco', 'kayak', 'ratestogo', 'expedia', 'hotels', 'venere', 'rottentomatoes', 'metacritic', 'imdb']
     else:
         filter_website = []
-elif dataset == 'extended_swde':
+elif dataset == 'ex_swde':
     from run_swde_et.schema import SCHEMA
-    DATA_HOME = 'data/swde/sourceCode'
-    if model == 'ChatGPT':
-        filter_website = ['book-amazon', 'camera-onsale', 'camera-jr', 'camera-compsource', 'camera-buy', 'movie-metacritic', 'movie-rottentomatoes', 'nbaplayer-wiki', 'university-collegenavigator', 'university-matchcollege']
-    else:
-        filter_website = []
+    DATA_HOME = 'data/ex_swde/sourceCode'
+    filter_website = []
 elif dataset == 'klarna':
     from run_klarna.task_prompt import klarna_prompt as prompt
     SCHEMA = {
@@ -83,10 +88,6 @@ elif dataset == 'klarna':
     filter_website = []
     DATA_HOME = 'data/klarna_product_page_dataset_WTL_50k/train/US'
 
-if args.save_name:
-    OUTPUT_HOME = f'dataset/{dataset}/{args.save_name}/{PATTERN}'
-else:
-    OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
 for field in SCHEMA.keys():
     if not os.path.exists(os.path.join(OUTPUT_HOME, field)):
@@ -97,18 +98,20 @@ for field in SCHEMA.keys():
     elif dataset == 'ds1':
         fake_item = SCHEMA[field][0]
         weblist = glob.glob(os.path.join(DATA_HOME, field, fake_item, '*'))
-    elif dataset == 'extended_swde':
+    elif dataset == 'ex_swde':
         field0, field1 = field.split('-')
-        #print(os.path.join(DATA_HOME, field0, field1))
-        weblist = glob.glob(os.path.join(DATA_HOME, field0, field))
-        weblist = [os.path.join(DATA_HOME, field0, field)]
+        print(os.path.join(DATA_HOME, field))
+        if os.path.exists(os.path.join(DATA_HOME, field)):
+            weblist = [os.path.join(DATA_HOME, field)]
+        else:
+            weblist = []
     elif dataset == 'klarna':
         weblist = glob.glob(os.path.join(DATA_HOME, '*'))
 
     weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
 
     for website_path in weblist:
-        if dataset in ['extended_swde', 'swde']:
+        if dataset in ['ex_swde', 'swde']:
             website_name = website_path.split('/')[-1].split('(')[0]
         elif dataset == 'ds1':
             website_name = website_path.split('/')[-1].replace(f'{field}_','').replace(f'_{fake_item}.html','')
@@ -130,7 +133,7 @@ for field in SCHEMA.keys():
         
         print(website_name)
         # web_index = webpage.split('/')[-1].replace('.htm','')
-        if dataset in ['swde', 'extended_swde']:
+        if dataset in ['swde', 'ex_swde']:
             webpage_list = glob.glob(os.path.join(website_path, '*'))
             sorted(webpage_list)
             for webpage in tqdm(webpage_list[:100]):

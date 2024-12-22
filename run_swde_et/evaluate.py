@@ -1,6 +1,7 @@
 import json
 import glob, os, re
 from collections import defaultdict
+from schema import SCHEMA
 import argparse 
 
 parser = argparse.ArgumentParser()
@@ -8,35 +9,28 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
 
-SCHEMA = {
-    'auto': ['model', 'price', 'engine', 'fuel_economy'],
-    'book': ['title', 'author', 'isbn_13', 'publisher', 'publication_date'],
-    'camera': ['model', 'price', 'manufacturer'],
-    'job': ['title', 'company', 'location', 'date_posted'],
-    'movie': ['title', 'director', 'genre', 'mpaa_rating'],
-    'nbaplayer': ['name', 'team', 'height', 'weight'],
-    'restaurant': ['name', 'address', 'phone', 'cuisine'],
-    'university': ['name', 'phone', 'website', 'type']
-}
-
 args = parser.parse_args()
 print(args)
 
 PATTERN = args.pattern
 model = args.model
+# PATTERN = 'autocrawler'
+# model = 'GPT4mini'
 
-GROUND_TRUTH_HOME = 'data/swde/sourceCode/groundtruth'
-OUTPUT_HOME = f'dataset/swde/{model}/{PATTERN}'
+GROUND_TRUTH_HOME = 'data/ex_swde/sourceCode/groundtruth'
+OUTPUT_HOME = f'dataset/ex_swde/{model}/{PATTERN}'
 
-def load_file(filename):
+def load_file(filename, field):
     result_dict = {}
     with open(filename, 'r', encoding='utf8') as f:
-        for index, line in enumerate(f.readlines()):
-            if index <= 1: 
-                continue
-            item_list = line.strip().split('\t')
-            #print(item_list)
-            result_dict[item_list[0]] = item_list[2 : 2+int(item_list[1])]
+        data = json.load(f)
+        for key, value in data.items():
+            field_id = key.replace('.htm', '')
+            if field in value:
+                result_dict[field_id] = value[field]
+            else:
+                result_dict[field_id] = []
+
     return result_dict
 
 def normalize(text):
@@ -101,9 +95,10 @@ for field in SCHEMA.keys():
         website_name = website_path.split('/')[-1].replace('.json', '')
         result_dict[field][website_name] = {}
         ground_truth = {}
+        
         for item in SCHEMA[field]:
-            filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}-{item}.txt')
-            ground_truth[item] = load_file(filename)
+            filename = os.path.join(GROUND_TRUTH_HOME, f'{field}.json')
+            ground_truth[item] = load_file(filename, item)
         
         with open(website_path, 'r', encoding='utf8') as f:
             predict_result = json.load(f)

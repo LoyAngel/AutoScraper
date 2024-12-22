@@ -172,7 +172,10 @@ class StepbackCrawler:
 
             res = self.request_parse(query, ['thought', 'judgement'])
 
-            print(json.dumps(res, ensure_ascii=False, indent=4))
+            try:
+                print(json.dumps(res, ensure_ascii=False, indent=4))
+            except:
+                pass
             if res['judgement'].lower() == 'yes':
                 action_sequence.append(xpath)
                 return action_sequence
@@ -225,7 +228,11 @@ class StepbackCrawler:
                 sub_extract_result = {'rule':rule}
                 sub_extract_result['extracted result'] = self.extract_with_sequence(html_content, rule)
                 extract_result.append(sub_extract_result)
-            print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+            try:
+                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+            except:
+                print("pass")
+
             query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
             res = self.request_parse(query, ['thought', 'number'])
             try:
@@ -255,7 +262,10 @@ class StepbackCrawler:
                 rule_list.append(page_rule)
 
         #rule_list = list(set(rule_list))
-        print(rule_list)
+        try:
+            print(rule_list)
+        except:
+                print("pass")
         if len(seed_html_set) > 1:
             valid_answer = False
             for rule in rule_list:
@@ -305,7 +315,10 @@ class StepbackCrawler:
                 rule_list.append(page_rule)
 
         #rule_list = list(set(rule_list))
-        print(rule_list)
+        try:
+            print(rule_list)
+        except:
+            print("pass")
         for webnum in range(2, len(seed_html_set) + 1):
             valid_answer = False
             for rule in rule_list[:webnum]:
@@ -319,9 +332,12 @@ class StepbackCrawler:
                 for html_content in seed_html_set[:webnum]:
                     sub_extract_result['extracted result'].append(self.extract_with_sequence(html_content, rule))
                 extract_result.append(sub_extract_result)
-            print('+' * 100)
-            print(f"Systhesis rule for the website {website_name}")
-            print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+            try:
+                print('+' * 100)
+                print(f"Systhesis rule for the website {website_name}")
+                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+            except:
+                print("pass")
             query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
             res = self.request_parse(query, ['thought', 'number'])
             try:

@@ -8,6 +8,7 @@ dataset/*
 figure/
 module/reflexion_crawler_tmp.py
 data/swde/*
+data/ex_swde/*
 
 run.sh
 eval_ds_*.py

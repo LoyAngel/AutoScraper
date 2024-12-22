@@ -6,6 +6,7 @@ from lxml.etree import _Element
 import bs4
 import tiktoken
 import difflib
+import re
 
 class StepTree:
     def __init__(self, html, step_len = 5000, len_func = len):
@@ -73,14 +74,14 @@ def build_absolute_xpath(node):
         node = parent
     return '/html/' + '/'.join(parts)
 
-def simplify_html(html, reserve_attrs = ['class']):
+def simplify_html(html, reserve_attrs = ['class', 'id']):
     soup = BeautifulSoup(html, 'html.parser')
     for element in soup(text=lambda text: isinstance(text, bs4.Comment)):
         element.extract()
     [s.extract() for s in soup('script')]
     [s.extract() for s in soup('style')]
-    [s.extract() for s in soup('img')]
     [s.extract() for s in soup('input')]
+    [s.extract() for s in soup('head')]
     for tag in soup.find_all():
         try:
             new_attrs = {}
@@ -117,60 +118,64 @@ def num_tokens_from_string(string: str, encoding_name: str) -> int:
     return num_tokens
 
 def get_pure_text(html):
-    soup = BeautifulSoup(html, 'html.parser')
-    text = soup.get_text().replace('\t',' ')
-    text = '\n'.join([line for line in text.split('\n') if line.strip() != ''])
-    text = ' '.join([line for line in text.split(' ') if line.strip() != ''])
-    return text
+    # soup = BeautifulSoup(html, 'html.parser')
+    # text = soup.get_text().replace('\t',' ')
+    # text = '\n'.join([line for line in text.split('\n') if line.strip() != ''])
+    # text = ' '.join([line for line in text.split(' ') if line.strip() != ''])
+    tree = etree.HTML(html)
+    i = 0
+    element_text_dict = {}
+    for element in tree.iter():
+        # get element_texts
+        element_text = ""
+        if element.text:
+            element_text += element.text
+        if element.tail:
+            element_text += element.tail
+        element_text = re.sub(r'\s+', '', element_text)
+        if element_text:
+            element_text_dict[str(i)] = element_text
+        else:
+            continue
+        i += 1
 
-def html_element_text_similarity_cal(text, html):
-    LEVEL_NUM = 3 # the number of ancestor levels to consider
-    COMBINED_NUM = 3 
-    def similarity_cal(text1, text2) -> float:
-        # calculate the similarity between two strings
-        seq = difflib.SequenceMatcher(None, text1, text2)
-        return seq.ratio()
-    
-    if text == "":
-        return html
+    return str(element_text_dict)
 
+def simplify_html_inverted(value: str, index: int, html: str) -> str:
+    LEVEL_NUM = 4 # the number of ancestor levels to consider
+    if value == "":
+        return ""
 
-    # extract the text of each element in the html, excluding the text of its children
-    element_texts = []
+    i = 0
+    element_select = None
     tree = etree.HTML(html)
     for element in tree.iter():
+        # get element_texts
+        element_text = ""
         if element.text:
-            element_texts.append(element.text)
+            element_text += element.text
         if element.tail:
-            element_texts.append(element.tail)
-    
-    # calculate the similarity between the given text and the text of each element 
-    similarities = [similarity_cal(text, element_text) for element_text in element_texts]
-    sorted_similarities = sorted(similarities, reverse=True)
+            element_text += element.tail
 
-    combined_html = ""
-    for index in range(COMBINED_NUM):
-        similar_element_text = element_texts[similarities.index(sorted_similarities[index])]
-        try:
-            print(f'similar_element{index}:{similar_element_text}')
-        except:
-            pass
-        # find the common ancestor of the most similar element
-        soup = BeautifulSoup(html, 'html.parser')
-        element = soup.find(string=similar_element_text)
-        
-        # element's N-level ancestor
-        ancestor = element
-        if ancestor:
-            for _ in range(LEVEL_NUM):
-                if ancestor.parent:
-                    ancestor = ancestor.parent
-                else:
-                    break
-        
-        combined_html += str(ancestor)
+        element_text = re.sub(r'\s+', '', element_text)
+        if not element_text:
+            continue
+        if i == index:
+            element_select = element
+            break
+        i += 1
     
-    return combined_html
+    ancestor = element_select
+    if ancestor is not None:
+        for _ in range(LEVEL_NUM):
+            if ancestor.getparent() is not None:
+                ancestor = ancestor.getparent()
+            else:
+                break
+
+    simplified_html = etree.tostring(ancestor, pretty_print=True, encoding='unicode')
+    
+    return simplified_html
 
 
 if __name__ == '__main__':

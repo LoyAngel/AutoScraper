@@ -1,5 +1,6 @@
 import glob
 import json, os, sys
+import random
 from tqdm import tqdm
 from utils.html_utils import *
 from module.stepback_crawler import StepbackCrawler
@@ -8,28 +9,40 @@ from module.stepback_extra_crawler import StepbackExtraCrawler
 
 import argparse
 
-parser = argparse.ArgumentParser()
+# parser = argparse.ArgumentParser()
 
-parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
-parser.add_argument('--model', type=str, help='Backbone model')
-parser.add_argument('--dataset', type=str, choices=['swde','ds1','extended_swde', 'klarna'], help='Which dataset to test.')
-parser.add_argument('--seed_website', type=int)
-parser.add_argument('--save_name', type=str)
-parser.add_argument('--overwrite', type=str, help='Whether overwrite the generated crawler.')
-parser.add_argument('--max_token', type=int)
+# parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
+# parser.add_argument('--model', type=str, help='Backbone model')
+# parser.add_argument('--dataset', type=str, choices=['swde','ds1','ex_swde', 'klarna'], help='Which dataset to test.')
+# parser.add_argument('--seed_website', type=int)
+# parser.add_argument('--save_name', type=str)
+# parser.add_argument('--overwrite', type=str, help='Whether overwrite the generated crawler.')
+# parser.add_argument('--max_token', type=int)
 
-args = parser.parse_args()
-print(args)
+# args = parser.parse_args()
+# print(args)
 
-PATTERN = args.pattern
-model = args.model
-dataset = args.dataset
-num_seed_website = args.seed_website
-overwrite = eval(args.overwrite)
-if args.max_token:
-    max_token = args.max_token
-else:
-    max_token = 8000
+# PATTERN = args.pattern
+# model = args.model
+# dataset = args.dataset
+# num_seed_website = args.seed_website
+# overwrite = eval(args.overwrite)
+# if args.max_token:
+#     max_token = args.max_token
+# else:
+#     max_token = 8000
+# if args.save_name:
+#     OUTPUT_HOME = f'dataset/{dataset}/{args.save_name}'
+# else:
+#     OUTPUT_HOME = f'dataset/{dataset}/{model}'
+PATTERN = 'autocrawler_extra'
+model = 'GPT4mini'
+dataset = 'ex_swde'
+num_seed_website = 3
+overwrite = False
+max_token = 30000
+OUTPUT_HOME = f'dataset/{dataset}/{model}'
+
 
 print('max_token', max_token)
 
@@ -66,9 +79,7 @@ if dataset == 'swde':
         'university': ['name', 'phone', 'website', 'type']
     }
     DATA_HOME = 'data/swde/sourceCode'
-
     filter_website = ['book-amazon']
-    GROUND_TRUTH_HOME = 'data/swde/sourceCode/groundtruth'
 
 elif dataset == 'ds1':
     from run_ds1.task_prompt import ds1_prompt as prompt
@@ -86,14 +97,11 @@ elif dataset == 'ds1':
         filter_website = ['shoppings_bestbuy', 'shoppings_pcworld', 'shoppings_uttings', 'shoppings_amazoncouk', 'shoppings_tesco', 'kayak', 'ratestogo', 'expedia', 'hotels', 'venere', 'rottentomatoes', 'metacritic', 'imdb']
     else:
         filter_website = []
-elif dataset == 'extended_swde':
+elif dataset == 'ex_swde':
     from run_swde_et.schema import SCHEMA
     from run_swde_et.task_prompt import ex_swde_prompt as prompt
-    DATA_HOME = 'data/swde/sourceCode'
-    if model == 'ChatGPT':
-        filter_website = ['book-amazon', 'camera-onsale', 'camera-jr', 'camera-compsource', 'camera-buy', 'movie-metacritic', 'movie-rottentomatoes', 'nbaplayer-wiki', 'university-collegenavigator', 'university-matchcollege']
-    else:
-        filter_website = []
+    DATA_HOME = 'data/ex_swde/sourceCode'
+    filter_website = []
 elif dataset == 'klarna':
     from run_klarna.task_prompt import klarna_prompt as prompt
     SCHEMA = {
@@ -101,11 +109,6 @@ elif dataset == 'klarna':
     }
     filter_website = []
     DATA_HOME = 'data/klarna_product_page_dataset_WTL_50k/train/US'
-
-if args.save_name:
-    OUTPUT_HOME = f'dataset/{dataset}/{args.save_name}'
-else:
-    OUTPUT_HOME = f'dataset/{dataset}/{model}'
 
 def load_file(filename):
     result_dict = {}
@@ -127,18 +130,20 @@ for field in SCHEMA.keys():
     elif dataset == 'ds1':
         fake_item = SCHEMA[field][0]
         weblist = glob.glob(os.path.join(DATA_HOME, field, fake_item, '*'))
-    elif dataset == 'extended_swde':
+    elif dataset == 'ex_swde':
         field0, field1 = field.split('-')
-        #print(os.path.join(DATA_HOME, field0, field1))
-        weblist = glob.glob(os.path.join(DATA_HOME, field0, field))
-        weblist = [os.path.join(DATA_HOME, field0, field)]
+        print(os.path.join(DATA_HOME, field))
+        if os.path.exists(os.path.join(DATA_HOME, field)):
+            weblist = [os.path.join(DATA_HOME, field)]
+        else:
+            weblist = []
     elif dataset == 'klarna':
         weblist = glob.glob(os.path.join(DATA_HOME, '*'))
 
     weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
 
     for website_path in weblist:
-        if dataset in ['extended_swde', 'swde']:
+        if dataset in ['ex_swde', 'swde']:
             website_name = website_path.split('/')[-1].split('(')[0]
         elif dataset == 'ds1':
             website_name = website_path.split('/')[-1].replace(f'{field}_','').replace(f'_{fake_item}.html','')
@@ -151,16 +156,17 @@ for field in SCHEMA.keys():
         if (website_name in filter_website) or (not overwrite and os.path.exists(os.path.join(OUTPUT_HOME, PATTERN, field, website_name) + f'_{PATTERN}.json')):
             continue
 
-        if dataset in ['swde', 'extended_swde', 'ds1']:
+        if dataset in ['swde', 'ex_swde', 'ds1']:
             webpage_list = glob.glob(os.path.join(website_path, '*'))
         elif dataset == 'klarna':
             webpage_list = glob.glob(os.path.join(website_path, '*', 'source.html'))
         xpath_rule = {}
         html_list = []
         html_index = []
-        if dataset in ['swde', 'extended_swde']:
+        if dataset in ['swde', 'ex_swde']:
             sorted(webpage_list)
             long_website = False
+            random.shuffle(webpage_list)
             for html_page in webpage_list[:num_seed_website]:
                 with open(html_page, 'r', encoding='utf8') as f:
                     # For skipping
@@ -201,14 +207,14 @@ for field in SCHEMA.keys():
 
         for item in SCHEMA[field]:
             print('-'*150)
-            if dataset == 'swde':
-                filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}-{item}.txt')
-                ground_truth = load_file(filename)
-
             instruction = f"{prompt[field]['meta']} {prompt[field][item]} {prompt['meta']}"
             print(instruction)
                 
-            xpath_rule[item] = xe.rule_synthesis(website_name, html_list, instruction, max_token=max_token)
+            try:
+                xpath_rule[item] = xe.rule_synthesis(website_name, html_list, instruction, max_token=max_token)
+            except Exception as e:
+                print(e)
+                exit
             #xpath_rule[item] = xe.rule_synthesis_cul(website_name, html_list, instruction, max_token=max_token)
         with open(os.path.join(OUTPUT_HOME, PATTERN, field, website_name) + f'_{PATTERN}.json', 'w') as f:
             json.dump(xpath_rule, f, indent=4)

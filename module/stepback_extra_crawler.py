@@ -1,10 +1,38 @@
 import json, re
 from lxml import etree, html
-from utils.html_utils import simplify_html, find_common_ancestor, get_pure_text, html_element_text_similarity_cal
+from utils.html_utils import simplify_html, find_common_ancestor, get_pure_text, simplify_html_inverted
 from utils.step import domlm_parse
 from bs4 import BeautifulSoup
+import traceback
 
 role_prompt = '''Suppose you're a web parser that is good at reading and understanding the HTML code and can give clear executable code on the brower.'''
+# crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
+
+# Instruction: {0}
+
+# Here're some hints:
+# 1. Do not output the xpath with exact value or element appears in the HTML.
+# 2. Do not output the xpath that indicate multi node with different value. It would be appreciate to use more @class to identify different node that may share the same xpath expression.
+# 3. If the HTML code doesn't contain the suitable information match the instruction, keep the xpath and value attrs blank.
+# 4. Avoid using some string function such as 'substring()' and 'normalize-space()' to normalize the text in the node.
+# Please output in the following Json format:
+# {{
+#     "thought": "", # a brief thought of how to confirm the value and generate the xpath
+#     "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
+#     "xpath": "" # a workable xpath to extract the value in the HTML
+# }}
+
+# Please think step by step as following:
+# 0. Find the target value suiting the instruction above first, and make it be the value in the following json.
+# 1. Find an element that it has its own unique attribute, such as 'text()' or 'class', and use it as the base Xpath. If `text()` is used, using the `contains()` function to match the text content.
+# 2. The next step is to extend the base Xpath using absolute positioning. Try to use the '[NUM]' to locate the element.'following-sibling' could aslo be used in the xpath.
+# 3. Write the result in the Json format as above.
+
+# Here's the HTML code:
+# ```
+# {1}
+# ```
+# '''
 crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
 
 Instruction: {0}
@@ -20,13 +48,6 @@ Please output in the following Json format:
     "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
     "xpath": "" # a workable xpath to extract the value in the HTML
 }}
-
-Please think step by step as following:
-0. Find the target value suiting the instruction above first, and make it be the value in the following json.
-1. Find generalizable text attributes related to the values specified in the instruction using class names, text(), and descendant element content. Construct a base XPath from these attributes, ensuring it is as unique as possible. 
-2. Because the unique element has been located by relative positioning, the next step is to extend the base Xpath using absolute positioning. Try to use the '[NUM]' to locate the element.'text()' and 'following-sibling' could aslo be used in the xpath. Ensure the final XPath selector returns a unique element.
-3. Write the result in the Json format as above.
-
 Here's the HTML code:
 ```
 {1}
@@ -72,7 +93,7 @@ Please output your judgement in the following Json format:
 judgement_prompt = '''Your main task is to judge whether the extracted value is consistent with the expected value, which is recognized beforehand. Please pay attention for the following case:
     1) If the extracted result contains some elements that is not in expected value, or contains empty value, it is not consistent.
     2) Differences in punctuations, symbols or formatting are acceptable.
-    3) The following cases are considered matching: Type differences ; Repeated values ; Values with prefix.
+    3) The following cases are considered matching: Type differences(e.g. ["a"] vs "a") ; Repeated values (e.g. ["a","a","a"] vs ["a"]); Values with prefix and suffix (e.g. "x a y" vs "a")
 
 The extracted value is: {0}
 The expected value is: {1}
@@ -107,16 +128,17 @@ Please rate every action sequence in the following Json format:
 }}
 '''
 
-inverted_prompt = '''You're a perfect text reader which is good at understanding the text content. Please recognize the best value following the instruction below.
+inverted_prompt = '''You're a perfect text reader which is good at understanding the dict texts content. The dict texts are extracted from the HTML code.Please recognize the best item in the dict text content that matches the instruction below.
 
 Instruction: {0}
 Please output in the following Json format:
 {{
     "thought": "", # a brief thought of how to confirm the value
-    "value": "" # the value extracted from the text content that match the instruction
+    "key": "", # a number, the key of the item in the dict text content, if there is no data, return "-1"
+    "value": "", # the value of the item in the dict text content which match the instruction, if there is no data keep it blank
 }}
 
-Here's the text content:
+Here's the dict text content:
 ```
 {1}
 ```
@@ -205,11 +227,16 @@ class StepbackExtraCrawler:
 
             query = f'{role_prompt}\n{judgement_prompt.format(str(results), value)}'
             res = self.request_parse(query, ['thought', 'judgement'])
+            try:
+                print(json.dumps(res, ensure_ascii=False, indent=4))
+            except:
+                pass
             if res['judgement'].lower() == 'yes':
                 action_sequence.append(xpath)
                 return action_sequence
 
             if index == LOOP_TIMES - 1: # Last loop doesn't need to stepback
+                action_sequence.append(xpath)
                 break
             
             # Stepback
@@ -234,7 +261,8 @@ class StepbackExtraCrawler:
                 if is_step_back and new_html_content != html_content:
                     xpath += '/..'
                 else:
-                    action_sequence.append(xpath)
+                    if bool(results) and any(results):
+                        action_sequence.append(xpath)
                     break
                     
             html_content = new_html_content
@@ -380,6 +408,8 @@ class StepbackExtraCrawler:
         else:
             for html_content in seed_html_set:
                 inverted_html_content = self.inverted_search(html_content, instruction)
+                if not inverted_html_content:
+                    return []
                 page_rule = self.generate_sequence(instruction, inverted_html_content, max_token=max_token)
                 rule_list.append(page_rule)
 
@@ -456,16 +486,24 @@ class StepbackExtraCrawler:
                     return self.extract_with_xpath(html_content, xpath)
     
     def inverted_search(self, html_content:str, instruction:str):
+        MAX_TRY_TIMES = 3
         if self.is_simplify:
             html_content = simplify_html(html_content)
+
         query = f'{role_prompt}\n{inverted_prompt.format(instruction, get_pure_text(html_content))}'
-        res = self.request_parse(query, ['thought', 'value'])
-        print(res)
-        value = res['value']
+        with open('inverted.txt', mode='w+', encoding='utf8') as f:
+            f.write(query)
 
-        return html_element_text_similarity_cal(value, html_content)
-
-
-
-       
-        
+        for _ in range(MAX_TRY_TIMES):
+            try:
+                res = self.request_parse(query, ['thought', 'value', 'key'])
+                print(res)
+                value = res['value']
+                index = int(res['key'])
+                res = simplify_html_inverted(value, index, html_content)
+                if res is not None:
+                    return res
+            except Exception as e:
+                print(e)
+        else:
+            return ''

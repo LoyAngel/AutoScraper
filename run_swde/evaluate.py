@@ -24,6 +24,8 @@ print(args)
 
 PATTERN = args.pattern
 model = args.model
+# PATTERN = 'autocrawler'
+# model = 'GPT4mini'
 
 GROUND_TRUTH_HOME = 'data/swde/sourceCode/groundtruth'
 OUTPUT_HOME = f'dataset/swde/{model}/{PATTERN}'
