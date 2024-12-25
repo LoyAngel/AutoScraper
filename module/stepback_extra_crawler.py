@@ -6,33 +6,6 @@ from bs4 import BeautifulSoup
 import traceback
 
 role_prompt = '''Suppose you're a web parser that is good at reading and understanding the HTML code and can give clear executable code on the brower.'''
-# crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
-
-# Instruction: {0}
-
-# Here're some hints:
-# 1. Do not output the xpath with exact value or element appears in the HTML.
-# 2. Do not output the xpath that indicate multi node with different value. It would be appreciate to use more @class to identify different node that may share the same xpath expression.
-# 3. If the HTML code doesn't contain the suitable information match the instruction, keep the xpath and value attrs blank.
-# 4. Avoid using some string function such as 'substring()' and 'normalize-space()' to normalize the text in the node.
-# Please output in the following Json format:
-# {{
-#     "thought": "", # a brief thought of how to confirm the value and generate the xpath
-#     "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
-#     "xpath": "" # a workable xpath to extract the value in the HTML
-# }}
-
-# Please think step by step as following:
-# 0. Find the target value suiting the instruction above first, and make it be the value in the following json.
-# 1. Find an element that it has its own unique attribute, such as 'text()' or 'class', and use it as the base Xpath. If `text()` is used, using the `contains()` function to match the text content.
-# 2. The next step is to extend the base Xpath using absolute positioning. Try to use the '[NUM]' to locate the element.'following-sibling' could aslo be used in the xpath.
-# 3. Write the result in the Json format as above.
-
-# Here's the HTML code:
-# ```
-# {1}
-# ```
-# '''
 crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
 
 Instruction: {0}
@@ -48,6 +21,13 @@ Please output in the following Json format:
     "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
     "xpath": "" # a workable xpath to extract the value in the HTML
 }}
+
+Please think step by step as following:
+0. Find the target value suiting the instruction above first, and make it be the value in the following json.
+1. Find an element that it has its own unique attribute, such as 'text()' or 'class', and use it as the base Xpath. If `text()` is used, using the `contains()` function to match the text content.
+2. The next step is to extend the base Xpath using absolute positioning. Try to use the '[NUM]' to locate the element.'following-sibling' could aslo be used in the xpath.
+3. Write the result in the Json format as above.
+
 Here's the HTML code:
 ```
 {1}
@@ -128,14 +108,14 @@ Please rate every action sequence in the following Json format:
 }}
 '''
 
-inverted_prompt = '''You're a perfect text reader which is good at understanding the dict texts content. The dict texts are extracted from the HTML code.Please recognize the best item in the dict text content that matches the instruction below.
+inverted_prompt = '''You're a perfect text reader which is good at understanding the list texts content. The list texts are extracted from the HTML code. Please recognize the best item in the list text content that matches the instruction below.
 
 Instruction: {0}
 Please output in the following Json format:
 {{
     "thought": "", # a brief thought of how to confirm the value
-    "key": "", # a number, the key of the item in the dict text content, if there is no data, return "-1"
-    "value": "", # the value of the item in the dict text content which match the instruction, if there is no data keep it blank
+    "item": "" # the item picked up from the text content that match the instruction, if there is no data, keep it blank; if there are multiple values, pick the first appeared one
+    "neighbors": ["", ""] # a list containing the two nearest values to the best value in the list, if it's last or first value, leave one "" blank
 }}
 
 Here's the dict text content:
@@ -236,7 +216,8 @@ class StepbackExtraCrawler:
                 return action_sequence
 
             if index == LOOP_TIMES - 1: # Last loop doesn't need to stepback
-                action_sequence.append(xpath)
+                if bool(results) and any(results):
+                    action_sequence.append(xpath)
                 break
             
             # Stepback
@@ -408,6 +389,8 @@ class StepbackExtraCrawler:
         else:
             for html_content in seed_html_set:
                 inverted_html_content = self.inverted_search(html_content, instruction)
+                with open('inverted_html.txt', mode='w+', encoding='utf8') as f:
+                    f.write(inverted_html_content)
                 if not inverted_html_content:
                     return []
                 page_rule = self.generate_sequence(instruction, inverted_html_content, max_token=max_token)
@@ -486,7 +469,7 @@ class StepbackExtraCrawler:
                     return self.extract_with_xpath(html_content, xpath)
     
     def inverted_search(self, html_content:str, instruction:str):
-        MAX_TRY_TIMES = 3
+        MAX_TRY_TIMES = 2
         if self.is_simplify:
             html_content = simplify_html(html_content)
 
@@ -496,11 +479,11 @@ class StepbackExtraCrawler:
 
         for _ in range(MAX_TRY_TIMES):
             try:
-                res = self.request_parse(query, ['thought', 'value', 'key'])
+                res = self.request_parse(query, ['thought', 'item', 'neighbors'])
                 print(res)
-                value = res['value']
-                index = int(res['key'])
-                res = simplify_html_inverted(value, index, html_content)
+                item = res['item']
+                neighbors = eval(res['neighbors']) if isinstance(res['neighbors'], str) else res['neighbors']
+                res = simplify_html_inverted(item, neighbors, html_content)
                 if res is not None:
                     return res
             except Exception as e:

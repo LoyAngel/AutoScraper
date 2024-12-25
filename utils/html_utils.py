@@ -123,8 +123,7 @@ def get_pure_text(html):
     # text = '\n'.join([line for line in text.split('\n') if line.strip() != ''])
     # text = ' '.join([line for line in text.split(' ') if line.strip() != ''])
     tree = etree.HTML(html)
-    i = 0
-    element_text_dict = {}
+    element_text_list = []
     for element in tree.iter():
         # get element_texts
         element_text = ""
@@ -134,46 +133,98 @@ def get_pure_text(html):
             element_text += element.tail
         element_text = re.sub(r'\s+', '', element_text)
         if element_text:
-            element_text_dict[str(i)] = element_text
-        else:
-            continue
-        i += 1
+            element_text_list.append(element_text)
+    return str(element_text_list)
 
-    return str(element_text_dict)
-
-def simplify_html_inverted(value: str, index: int, html: str) -> str:
+def simplify_html_inverted(value: str, neighbors: list, html: str) -> str:
     LEVEL_NUM = 4 # the number of ancestor levels to consider
-    if value == "":
-        return ""
+    COMBINED_NUM = 2 
+    def similarity_cal(text1, text2) -> float:
+        # calculate the similarity between two strings
+        seq = difflib.SequenceMatcher(None, text1, text2)
+        return seq.ratio()
+    
+    if value == "" and any(neighbors) == False:
+        return html
 
-    i = 0
-    element_select = None
+    neighbors.insert(0, value)
+    total_value = ''.join(neighbors)
+
+
+    # extract the text of each element in the html, excluding the text of its children
+    element_text_list = []
+    element_neighbors_text_list = []
     tree = etree.HTML(html)
-    for element in tree.iter():
+    for element_to_find in tree.iter():
         # get element_texts
         element_text = ""
-        if element.text:
-            element_text += element.text
-        if element.tail:
-            element_text += element.tail
-
+        if element_to_find.text:
+            element_text += element_to_find.text
+        if element_to_find.tail:
+            element_text += element_to_find.tail
         element_text = re.sub(r'\s+', '', element_text)
-        if not element_text:
-            continue
-        if i == index:
-            element_select = element
-            break
-        i += 1
-    
-    ancestor = element_select
-    if ancestor is not None:
-        for _ in range(LEVEL_NUM):
-            if ancestor.getparent() is not None:
-                ancestor = ancestor.getparent()
-            else:
-                break
+        if element_text:
+            element_text_list.append(element_text)
+        
+    for i in range(len(element_text_list)):
+        element_neighbors_text = ""
+        if i != 0:
+            element_neighbors_text += element_text_list[i - 1]
+        element_neighbors_text += element_text_list[i]
+        if i != len(element_text_list) - 1:
+            element_neighbors_text += element_text_list[i + 1]
+        element_neighbors_text_list.append(element_neighbors_text)
 
-    simplified_html = etree.tostring(ancestor, pretty_print=True, encoding='unicode')
+
+    # return re.sub(r'\s+', '', element_texts[275]).strip() + '\n' + re.sub(r'\s+', '', element_ancestor_texts[275]).strip()
+
+    # calculate the similarity between the given text and the text of each element element_neighbors_text_list[i])
+    similarities = [similarity_cal(value, element_text_list[i]) * 0.6 + similarity_cal(total_value, element_neighbors_text_list[i]) * 0.4
+                    for i in range(len(element_text_list))]
+    sorted_similarities = sorted(similarities, reverse=True)
+
+    simplified_html = ""
+    for index in range(COMBINED_NUM):
+        similar_element_index = similarities.index(sorted_similarities[index])
+        similar_element_text = element_text_list[similar_element_index]
+        try:
+            print(f'similar_element{index}:{similar_element_text}')
+        except:
+            pass
+        # find the common ancestor of the most similar element
+        # soup = BeautifulSoup(html, 'html.parser')
+        # element = soup.find(string=similar_element_text)
+        i = 0
+        element = None
+        for element_to_find in tree.iter():
+            element_text = ""
+            if element_to_find.text:
+                element_text += element_to_find.text
+            if element_to_find.tail:
+                element_text += element_to_find.tail
+            element_text = re.sub(r'\s+', '', element_text)
+            if not element_text:
+                continue
+            if i == similar_element_index:
+                element = element_to_find
+                break
+            i += 1
+        
+        ancestor = element
+        if ancestor is not None:
+            for _ in range(LEVEL_NUM):
+                if ancestor.getparent() is not None:
+                    ancestor = ancestor.getparent()
+                else:
+                    break
+        
+        to_be_added = etree.tostring(ancestor, pretty_print=True, encoding='unicode')
+        if to_be_added in simplified_html:
+            continue
+        if simplified_html in to_be_added:
+            simplified_html = to_be_added
+            continue
+        simplified_html += to_be_added
     
     return simplified_html
 

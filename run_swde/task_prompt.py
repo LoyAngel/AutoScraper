@@ -11,7 +11,7 @@ swde_prompt = {
         'meta': 'Here\'s a webpage with detail information of a book.',
         'title': 'Please extract the title of the book.', 
         'author': 'Please extract the author of the book.', 
-        'isbn_13': 'Please extract the isbn number of the book.', 
+        'isbn_13': 'Please extract the isbn 13 number of the book.', 
         'publisher': 'Please extract the publisher of the book.', 
         'publication_date': 'Please extract the publication date of the book.'
     },

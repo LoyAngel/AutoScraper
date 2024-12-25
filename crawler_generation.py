@@ -8,6 +8,7 @@ from module.reflexion_crawler import AutoCrawler
 from module.stepback_extra_crawler import StepbackExtraCrawler
 
 import argparse
+import io
 
 # parser = argparse.ArgumentParser()
 
@@ -37,7 +38,7 @@ import argparse
 #     OUTPUT_HOME = f'dataset/{dataset}/{model}'
 PATTERN = 'autocrawler_extra'
 model = 'GPT4mini'
-dataset = 'ex_swde'
+dataset = 'swde'
 num_seed_website = 3
 overwrite = False
 max_token = 30000
