@@ -7,7 +7,9 @@ import bs4
 import tiktoken
 import difflib
 import re
+import logging
 
+logger = logging.getLogger('crawler')
 class StepTree:
     def __init__(self, html, step_len = 5000, len_func = len):
         self.soup = BeautifulSoup(html)
@@ -20,8 +22,9 @@ class StepTree:
 
 def find_common_ancestor(html_content:str, xpath:str):
     try:
-        tree = etree.HTML(html_content)
-        #print(xpath)
+        parser = etree.HTMLParser(recover=False)
+        tree = etree.HTML(html_content.encode('utf-8'), parser=parser) # type: ignore
+        #logger.info(xpath)
         xpath = xpath.replace('::text()','::*')
         xpath = xpath.replace('/text()','/*')
         nodes = tree.xpath(xpath)
@@ -56,7 +59,7 @@ def get_absolute_xpath(html, xpath):
             node = node[0]
         return build_absolute_xpath(node)
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         return None
 
 def build_absolute_xpath(node):
@@ -78,16 +81,20 @@ def simplify_html(html, reserve_attrs = ['class', 'id']):
     soup = BeautifulSoup(html, 'html.parser')
     for element in soup(text=lambda text: isinstance(text, bs4.Comment)):
         element.extract()
+    
     [s.extract() for s in soup('script')]
     [s.extract() for s in soup('style')]
     [s.extract() for s in soup('input')]
-    [s.extract() for s in soup('head')]
+    head = soup.find('head')
+    if head:
+        [s.extract() for s in head(text=lambda text: text is None)]
+
     for tag in soup.find_all():
         try:
             new_attrs = {}
             for attr in reserve_attrs:
-                if attr in tag.attrs.keys(): 
-                    new_attrs = {attr: tag.attrs[attr]}
+                if tag.get(attr):
+                    new_attrs[attr] = tag.get(attr)
             tag.attrs = new_attrs
         except:
             pass
@@ -117,12 +124,12 @@ def num_tokens_from_string(string: str, encoding_name: str) -> int:
     num_tokens = len(encoding.encode(string))
     return num_tokens
 
-def get_pure_text(html):
+def get_pure_text(html: str) -> str:
     # soup = BeautifulSoup(html, 'html.parser')
     # text = soup.get_text().replace('\t',' ')
     # text = '\n'.join([line for line in text.split('\n') if line.strip() != ''])
     # text = ' '.join([line for line in text.split(' ') if line.strip() != ''])
-    tree = etree.HTML(html)
+    tree = etree.HTML(html.encode('utf-8')) # type: ignore
     element_text_list = []
     for element in tree.iter():
         # get element_texts
@@ -154,7 +161,7 @@ def simplify_html_inverted(value: str, neighbors: list, html: str) -> str:
     # extract the text of each element in the html, excluding the text of its children
     element_text_list = []
     element_neighbors_text_list = []
-    tree = etree.HTML(html)
+    tree = etree.HTML(html.encode('utf-8')) # type: ignore
     for element_to_find in tree.iter():
         # get element_texts
         element_text = ""
@@ -176,7 +183,6 @@ def simplify_html_inverted(value: str, neighbors: list, html: str) -> str:
         element_neighbors_text_list.append(element_neighbors_text)
 
 
-    # return re.sub(r'\s+', '', element_texts[275]).strip() + '\n' + re.sub(r'\s+', '', element_ancestor_texts[275]).strip()
 
     # calculate the similarity between the given text and the text of each element element_neighbors_text_list[i])
     similarities = [similarity_cal(value, element_text_list[i]) * 0.6 + similarity_cal(total_value, element_neighbors_text_list[i]) * 0.4
@@ -188,7 +194,7 @@ def simplify_html_inverted(value: str, neighbors: list, html: str) -> str:
         similar_element_index = similarities.index(sorted_similarities[index])
         similar_element_text = element_text_list[similar_element_index]
         try:
-            print(f'similar_element{index}:{similar_element_text}')
+            logger.info(f'similar_element{index}:{similar_element_text}')
         except:
             pass
         # find the common ancestor of the most similar element
@@ -231,13 +237,28 @@ def simplify_html_inverted(value: str, neighbors: list, html: str) -> str:
 
 if __name__ == '__main__':
     import requests
-    with open('/mnt/data122/harryhuang/swde/sourceCode/university/university-collegeboard(2000)/0435.htm', 'r') as f:
+    with open('inverted_html.txt', 'r') as f:
         html_content = f.read()
         html_content = simplify_html(html_content)
         #print(html_content)
         #print(simplify_html(html))
         #print(len(simplify_html(html)))
-    xpath = "//h3[text()='Type of School']"
+    xpath = "//div[@id='nameAddress']/h5[1]/text() | //div[@id='nameAddress']/h5[2]/a[@class='addressLink']/text() | //div[@id='nameAddress']/h5[2]/a[@class='addressLink'][2]/text() | //div[@id='nameAddress']/h5[2]/a[@class='addressLink'][3]/text()"
+    value = "12305 Mayfield Rd. (Murray Hill Rd.) Cleveland, OH 44106"
     print(find_common_ancestor(html_content, xpath))
-    abs_xpath = get_absolute_xpath(html_content, xpath)
-    print(find_common_ancestor(html_content, abs_xpath))
+    while True:
+        new_html_content = find_common_ancestor(html_content, xpath)
+        new_html_content_clear = re.sub(r'\s', '', new_html_content)
+
+        is_step_back = False
+        values = re.split(r'\s+', value)
+        values = [re.sub(r'\s', '', v) for v in values]
+        for value in values:
+            if value not in new_html_content_clear:
+                is_step_back = True
+                break
+        if is_step_back and new_html_content != html_content:
+            xpath += '/..'
+        else:
+            print(xpath)
+            break

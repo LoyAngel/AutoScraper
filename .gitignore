@@ -7,9 +7,7 @@ utils/ms_api_copy.py
 dataset/*
 figure/
 module/reflexion_crawler_tmp.py
-data/swde/sourceCode/*
-data/ex_swde/sourceCode/*
-data/weir/sourceCode/*
+data/*/sourceCode/*
 
 run.sh
 eval_ds_*.py

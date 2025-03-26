@@ -13,8 +13,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
-parser.add_argument('--dataset', type=str, choices=['swde','ds1','ex_swde','klarna'], help='Which dataset to test.')
-parser.add_argument('--seed_website', type=int)
+parser.add_argument('--dataset', type=str, choices=['swde','ds1','ex_swde','klarna', 'weir'], help='Which dataset to test.')
 parser.add_argument('--save_name', type=str)
 parser.add_argument('--overwrite', type=str, help='Whether overwrite the generated crawler.')
 
@@ -24,19 +23,16 @@ print(args)
 PATTERN = args.pattern
 model = args.model
 dataset = args.dataset
-num_seed_website = args.seed_website
 overwrite = eval(args.overwrite)
 if args.save_name:
     OUTPUT_HOME = f'dataset/{dataset}/{args.save_name}/{PATTERN}'
 else:
     OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
-# PATTERN = 'autocrawler'
+# PATTERN = 'autocrawler_extra'
 # model = 'GPT4mini'
-# dataset = 'ex_swde'
-# num_seed_website = 3
+# dataset = 'weir'
 # overwrite = False
-# max_token = 8000
 # OUTPUT_HOME = f'dataset/{dataset}/{model}/{PATTERN}'
 
 if PATTERN == 'autocrawler':
@@ -87,7 +83,11 @@ elif dataset == 'klarna':
     }
     filter_website = []
     DATA_HOME = 'data/klarna_product_page_dataset_WTL_50k/train/US'
-
+elif dataset == 'weir':
+    from run_weir.task_prompt import weir_prompt as prompt
+    from run_weir.schema import SCHEMA
+    DATA_HOME = 'data/weir/sourceCode'
+    filter_website = []
 
 for field in SCHEMA.keys():
     if not os.path.exists(os.path.join(OUTPUT_HOME, field)):
@@ -107,6 +107,8 @@ for field in SCHEMA.keys():
             weblist = []
     elif dataset == 'klarna':
         weblist = glob.glob(os.path.join(DATA_HOME, '*'))
+    elif dataset == 'weir':
+        weblist = glob.glob(os.path.join(DATA_HOME, field, '*'))
 
     weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
 
@@ -117,6 +119,8 @@ for field in SCHEMA.keys():
             website_name = website_path.split('/')[-1].replace(f'{field}_','').replace(f'_{fake_item}.html','')
         elif dataset == 'klarna':
             website_name = website_path.split('/')[-1]
+        elif dataset == 'weir':
+            website_name = field + '-' + website_path.split('/')[-1]
         
         if os.path.exists(os.path.join(OUTPUT_HOME, field, website_name) + '.json') and (not overwrite):
             continue
@@ -125,7 +129,7 @@ for field in SCHEMA.keys():
         # sorted(webpage_list)
         if not os.path.exists(os.path.join(OUTPUT_HOME, field, website_name) + f'_{PATTERN}.json'):
             continue
-        with open(os.path.join(OUTPUT_HOME, field, website_name) + f'_{PATTERN}.json', 'r') as f:
+        with open(os.path.join(OUTPUT_HOME, field, website_name) + f'_{PATTERN}.json', mode='r', errors='ignore') as f:
             xpath_rule = json.load(f)
 
         # Rule execution
@@ -144,7 +148,7 @@ for field in SCHEMA.keys():
                 
                 new_res = {'page': web_index}
                 for item in SCHEMA[field]:
-                    item_value = extract(html, xpath_rule[item])
+                    item_value = extract(html, xpath_rule.get(item, []))
                     new_res[item] = item_value
 
                 result_list.append(new_res)
@@ -172,7 +176,22 @@ for field in SCHEMA.keys():
 
                     #print(item, item_value)
                 result_list.append(new_res)
+        elif dataset == 'weir':
+            webpage_list = glob.glob(os.path.join(website_path, '*'))
+            sorted(webpage_list)
+            for webpage in tqdm(webpage_list[:100]):
+                web_index = webpage.split('/')[-1].replace('.html','')
+
+                with open(webpage, 'r', errors='ignore', encoding="utf8") as f:
+                    html = f.read()
+                
+                new_res = {'page': web_index}
+                for item in SCHEMA[field]:
+                    item_value = extract(html, xpath_rule[item])
+                    new_res[item] = item_value
+
+                result_list.append(new_res)
 
         # with open(os.path.join(tmp_out, field, website_name) + '.json', 'w', encoding="utf8") as f:
-        with open(os.path.join(OUTPUT_HOME, field, website_name) + '.json', 'w', encoding='utf8') as f:
+        with open(os.path.join(OUTPUT_HOME, field, website_name) + '.json', 'w', encoding='utf8', errors='ignore') as f:
             json.dump(result_list, f, indent=4)

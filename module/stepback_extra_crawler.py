@@ -1,12 +1,19 @@
-import json, re
+import json
+import re
+import logging
 from lxml import etree, html
 from utils.html_utils import simplify_html, find_common_ancestor, get_pure_text, simplify_html_inverted
 from utils.step import domlm_parse
+from utils.evalueate_utils import normalize
 from bs4 import BeautifulSoup
 import traceback
+from functools import lru_cache
+
+logger = logging.getLogger('crawler')
 
 role_prompt = '''Suppose you're a web parser that is good at reading and understanding the HTML code and can give clear executable code on the brower.'''
-crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
+
+crawler_prompt_base = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
 
 Instruction: {0}
 
@@ -15,7 +22,29 @@ Here're some hints:
 2. Do not output the xpath that indicate multi node with different value. It would be appreciate to use more @class to identify different node that may share the same xpath expression.
 3. If the HTML code doesn't contain the suitable information match the instruction, keep the xpath and value attrs blank.
 4. Avoid using some string function such as 'substring()' and 'normalize-space()' to normalize the text in the node.
+5. Make sure all text content and class attributes in the xpath are exactly accurate, including spaces and underscores. Do not ignore or modify any whitespace, special characters, or formatting in these attributes.
 Please output in the following Json format:
+{{
+    "thought": "", # a brief thought of how to confirm the value and generate the xpath
+    "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
+    "xpath": "" # a workable xpath to extract the value in the HTML
+}}
+Here's the HTML code:
+```
+{1}
+```
+'''
+crawler_prompt_attr = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
+
+Instruction: {0}
+
+Here're some hints:
+1. Do not output the xpath with exact value or element appears in the HTML.
+2. Do not output the xpath that indicate multi node with different value. It would be appreciate to use more @class to identify different node that may share the same xpath expression.
+3. If the HTML code doesn't contain the suitable information match the instruction, keep the xpath and value attrs blank.
+4. Avoid using some string function such as 'substring()' and 'normalize-space()' to normalize the text in the node.
+Please output in the following Json format without any other information:
+5. Make sure all text content and class attributes in the xpath are exactly accurate, including spaces and underscores. Do not ignore or modify any whitespace, special characters, or formatting in these attributes.
 {{
     "thought": "", # a brief thought of how to confirm the value and generate the xpath
     "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
@@ -24,7 +53,7 @@ Please output in the following Json format:
 
 Please think step by step as following:
 0. Find the target value suiting the instruction above first, and make it be the value in the following json.
-1. Find an element that it has its own unique attribute, such as 'text()' or 'class', and use it as the base Xpath. If `text()` is used, using the `contains()` function to match the text content.
+1. Find an element that it has its own unique attribute, such as 'text()' or 'class', and use it as the base Xpath. If `text()` is used, using the `contains()` function to match the text content. 
 2. The next step is to extend the base Xpath using absolute positioning. Try to use the '[NUM]' to locate the element.'following-sibling' could aslo be used in the xpath.
 3. Write the result in the Json format as above.
 
@@ -32,6 +61,36 @@ Here's the HTML code:
 ```
 {1}
 ```
+
+{2}
+'''
+crawler_prompt_posi = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
+
+Instruction: {0}
+
+Here're some hints:
+1. Do not output the xpath with exact value or element appears in the HTML.
+2. Do not output the xpath that indicate multi node with different value. It would be appreciate to use more @class to identify different node that may share the same xpath expression.
+3. If the HTML code doesn't contain the suitable information match the instruction, keep the xpath and value attrs blank.
+
+Please output in the following Json format without any other information:
+{{
+    "thought": "", # a brief thought of how to confirm the value and generate the xpath
+    "value": "", # the value extracted from the HTML that match the instruction, if there is no data, keep it blank
+    "xpath": "" # a workable xpath to extract the value in the HTML
+}}
+
+Please think step by step as following:
+0. Find the target value suiting the instruction above first, and make it be the value in the following json.
+1. Locate the element in absolute positioning without using any attributes or `text()`(except the last `text()` tag). Just describe the element's position in the HTML tree using numbers(including the last `text()` tag). Start the xpath with '//' and the tag name.
+2. Write the result in the Json format as above.
+
+Here's the HTML code:
+```
+{1}
+```
+
+{2}
 '''
 
 crawler_wr_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
@@ -86,7 +145,7 @@ Please output your judgement in the following Json format:
 '''
 
 synthesis_prompt = '''You're a perfect discriminator which is good at HTML understanding as well. Following the instruction, there are some action sequence written from several HTML and the corresponding result extracted from several HTML. Please choose one that can be best potentially adapted to the same extraction task on other webpage in the same websites.
-Please evaluate each action sequence based on these criteria, rating them on a scale of 1-10 (integer):
+Please evaluate each action sequence based on these criteria, rating them on a scale of 0-10 (integer), higher scores indicate better performance:
 Accuracy: Whether the value in the "extracted result" matches the content required by the instructions.
 Generalizability: The preference for flexible selectors (e.g., [@class='st.']) over rigid ones (e.g., [text()='st.']), indicating better adaptability.
 Simplicity: Shorter expressions are preferred over longer ones, provided the output remains stable and accurate.
@@ -104,7 +163,7 @@ The action sequences and the corresponding extracted results with different sequ
 Please rate every action sequence in the following Json format:
 {{
     "thought": "" # brief explanation of your selection rationale.
-    "rate": "" # list of ratings for each sequence, formatted as "[[accuracy1, generalizability1, robustness1], ...]", a null action sequence should be rated by "[0, 0, 0]".
+    "rate": "" # list of ratings for each sequence, formatted as "[[accuracy1, generalizability1, robustness1], ...]".
 }}
 '''
 
@@ -114,7 +173,7 @@ Instruction: {0}
 Please output in the following Json format:
 {{
     "thought": "", # a brief thought of how to confirm the value
-    "item": "" # the item picked up from the text content that match the instruction, if there is no data, keep it blank; if there are multiple values, pick the first appeared one
+    "item": "" # the full item picked up from the text content that match the instruction, if there is no data, keep it blank; if there are multiple values, pick the first appeared one
     "neighbors": ["", ""] # a list containing the two nearest values to the best value in the list, if it's last or first value, leave one "" blank
 }}
 
@@ -124,12 +183,21 @@ Here's the dict text content:
 ```
 
 '''
+
+last_wrong_prompt = '''The last results are not correct. Don't use the same xpath in the results. The last results are as follow:
+Xpath: {0}
+The extracted results: {1}
+The expected value: {2} 
+judgement results:
+{3}
+'''
+
 class StepbackExtraCrawler:
     def __init__(self,
                  simplify=True,
                  verbose=True,
                  api=None,
-                 error_max_times=15):
+                 error_max_times=5):
 
         if api == None:
             raise ValueError("No api has been assigned!!")
@@ -138,7 +206,7 @@ class StepbackExtraCrawler:
         self.verbose = verbose
         self.error_max_times = error_max_times
 
-    def request_parse(self, 
+    def request_parse(self,
                       query: str,
                       keys: list[str] = []) -> dict[str, str]:
         """A safe and reliable call to LLMs, which confirm that the output can be parsed by json.loads().
@@ -157,25 +225,29 @@ class StepbackExtraCrawler:
             matches = re.findall(pattern, response, re.DOTALL)
             try:
                 for match in matches:
-                    res = json.loads(match) # type: ignore
+                    cleaned_match = re.sub(r'\\', r'\\\\', match)
+                    res = json.loads(cleaned_match, strict=False) # type: ignore
                     for key in keys:
                         assert res[key]
                     target = True
                 if target:
                     break
-            except:
+            except Exception as e:
+                logger.error(e)
                 pass
         if target:
-            #print(res)
+            # logger.info(res)
             return res
         else:
-            return {key:"" for key in keys}
-        
+            return {key: "" for key in keys}
+
     def generate_sequence_html(self,
-                          instruction: str,
-                          html_content: str,
-                          ground_truth=None):
+                               instruction: str,
+                               html_content: str,
+                               seed_index: int,
+                               ground_truth=None):
         LOOP_TIMES = 3
+        last_results = ""
 
         action_sequence = []
 
@@ -184,42 +256,54 @@ class StepbackExtraCrawler:
                 query = f'{role_prompt}{crawler_wr_prompt.format(instruction, ground_truth, html_content)}'
                 res = self.request_parse(query, ['thought', 'xpath'])
             else:
-                query = f'{role_prompt}\n{crawler_prompt.format(instruction, html_content)}'
-                with open('crawler.txt', mode='w+', encoding='utf8') as f:
+                # 消融点1
+                if seed_index == 0:
+                    crawler_prompt = crawler_prompt_posi
+                else:
+                    crawler_prompt = crawler_prompt_attr
+                crawler_prompt = crawler_prompt_base
+                query = f'{role_prompt}\n{crawler_prompt.format(instruction, html_content, last_results)}'
+                with open('crawler.txt', mode='w+', encoding='utf8', errors='ignore') as f:
                     f.write(query)
                 res = self.request_parse(query, ['thought', 'value', 'xpath'])
-        
+
             results = self.extract_with_xpath(html_content, res['xpath'])
             xpath = res['xpath']
             value = ground_truth if ground_truth else res['value']
         
+        
+            
+
             
             try:
-                print('-' * 50)
-                print(value)
-                print(results)
-                print(xpath)
+                logger.info(
+                    "-" * 50 + 
+                    f"\nvalue: {value}" +
+                    f"\nresults: {results}" +
+                    f"\nxpath: {xpath}"
+                )
             except:
-                pass
+                logger.error('print error')
 
             if value == '':
                 return action_sequence
 
-            query = f'{role_prompt}\n{judgement_prompt.format(str(results), value)}'
+            query = f'{role_prompt}\n{judgement_prompt.format(normalize(str(results)), normalize(str(value)))}'
             res = self.request_parse(query, ['thought', 'judgement'])
             try:
-                print(json.dumps(res, ensure_ascii=False, indent=4))
+                logger.info(json.dumps(res, ensure_ascii=False, indent=4))
             except:
-                pass
+                logger.error('print error')
             if res['judgement'].lower() == 'yes':
                 action_sequence.append(xpath)
                 return action_sequence
 
-            if index == LOOP_TIMES - 1: # Last loop doesn't need to stepback
+            if index == LOOP_TIMES - 1:  # Last loop doesn't need to stepback
                 if bool(results) and any(results):
                     action_sequence.append(xpath)
                 break
-            
+
+            # last_results = last_wrong_prompt.format(xpath, results, value, json.dumps(res, ensure_ascii=False, indent=4))
             # Stepback
             while True:
                 new_html_content = find_common_ancestor(html_content, xpath)
@@ -242,6 +326,7 @@ class StepbackExtraCrawler:
                 if is_step_back and new_html_content != html_content:
                     xpath += '/..'
                 else:
+                    # 消融点1
                     if bool(results) and any(results):
                         action_sequence.append(xpath)
                     break
@@ -250,18 +335,18 @@ class StepbackExtraCrawler:
 
         return action_sequence
 
-    def generate_sequence(self, instruction, html_content, ground_truth = None, max_token=8000):
+    def generate_sequence(self, instruction, html_content, ground_truth=None, max_token=8000, seed_index=0):
         if self.is_simplify:
             html_content = simplify_html(html_content)
-        #print(html_content)
+        # logger.info(html_content)
         soup = BeautifulSoup(html_content, 'html.parser')
         subtree_list = domlm_parse(soup, max_token)
-        print('Page split:', len(subtree_list))
+        logger.info(f'Page split: {len(subtree_list)}')
         rule_list = []
         for sub_html in subtree_list:
-            page_rule = self.generate_sequence_html(instruction, sub_html, ground_truth)
+            page_rule = self.generate_sequence_html(instruction, sub_html, seed_index,  ground_truth)
             rule_list.append(page_rule)
-        
+
         if len(subtree_list) > 1:
             valid_answer = False
             for rule in rule_list:
@@ -271,14 +356,16 @@ class StepbackExtraCrawler:
                 return []
             extract_result = []
             for rule in rule_list:
-                sub_extract_result = {'rule':rule}
-                sub_extract_result['extracted result'] = self.extract_with_sequence(html_content, rule)
+                sub_extract_result = {'rule': rule}
+                sub_extract_result['extracted result'] = self.extract_with_sequence(
+                    html_content, rule)
                 extract_result.append(sub_extract_result)
-            print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+            logger.info(json.dumps(extract_result,
+                        ensure_ascii=False, indent=4))
             return self.rate_and_perferred(instruction, extract_result, rule_list)
         else:
             return rule_list[0]
-        
+
     def rate_and_perferred(self, instruction, extract_result, rule_list):
         ACCURACY_SCORE_WEIGHT = 0.4
         GENERALIZABILITY_SCORE_WEIGHT = 0.2
@@ -289,12 +376,15 @@ class StepbackExtraCrawler:
         def local_rate():
             # action count score
             action_count_list = [len(rule) for rule in rule_list]
-            action_count_max, action_count_min = max(action_count_list), min(action_count_list)
+            action_count_max, action_count_min = max(
+                action_count_list), min(action_count_list)
             if action_count_max == action_count_min:
                 action_count_score_list = [10] * len(action_count_list)
             else:
                 action_count_score_list = [
-                    int(10 - 9 * (action_count_score - action_count_min) / (action_count_max - action_count_min)) 
+                    int(10 - 9 * (action_count_score - action_count_min) /
+                        (action_count_max - action_count_min))
+                    if action_count_score != 0 else 0
                     for action_count_score in action_count_list
                 ]
 
@@ -308,12 +398,15 @@ class StepbackExtraCrawler:
                     average_length_list.append(0)
                 else:
                     average_length_list.append(rule_total_length / len(rule))
-            average_length_max, average_length_min = max(average_length_list), min(average_length_list)
+            average_length_max, average_length_min = max(
+                average_length_list), min(average_length_list)
             if average_length_max == average_length_min:
                 average_length_score_list = [10] * len(average_length_list)
             else:
                 average_length_score_list = [
-                    int(10 - 9 * (average_length_score - average_length_min) / (average_length_max - average_length_min))
+                    int(10 - 9 * (average_length_score - average_length_min) /
+                        (average_length_max - average_length_min))
+                    if average_length_score != 0 else 0
                     for average_length_score in average_length_list
                 ]
 
@@ -323,20 +416,22 @@ class StepbackExtraCrawler:
             '''
             Smooth the scores process like LLM does
             '''
-            sorted_indices = sorted(range(len(score_list)), key=lambda k: score_list[k])
+            sorted_indices = sorted(
+                range(len(score_list)), key=lambda k: score_list[k], reverse=True)
             sorted_scores = [score_list[i] for i in sorted_indices]
             length = len(score_list)
-            
+
             # Generate smoothed scores
             if length < 10:
                 smoothed_scores = list(range(10, 10 - length, -1))
             else:
-                smoothed_scores = [10 - int(10 * i / length) for i in range(length)]
-            
+                smoothed_scores = [10 - int(10 * i / length)
+                                   for i in range(length)]
+
             # Assign smoothed scores, ensuring equal original scores get the same smoothed score
             final_scores = [0] * length
             last_score, last_smoothed = None, None
-            
+
             for i, index in enumerate(sorted_indices):
                 if sorted_scores[i] == last_score:
                     final_scores[index] = last_smoothed
@@ -344,63 +439,69 @@ class StepbackExtraCrawler:
                     last_score = sorted_scores[i]
                     last_smoothed = smoothed_scores[i]
                     final_scores[index] = last_smoothed
-            
+
             return final_scores
-    
-        query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
+
+        query = synthesis_prompt.format(
+            instruction, json.dumps(extract_result, indent=4))
         res = self.request_parse(query, ['thought', 'rate'])
-        llm_rate = eval(res['rate']) if isinstance(res['rate'], str) else res['rate']
+        try:
+            llm_rate = eval(res['rate']) if isinstance(
+            res['rate'], str) else res['rate']
+        except:
+            llm_rate = [[0, 0, 0]] * len(rule_list)
         action_count_score_list, average_length_score_list = local_rate()
-        
+
         total_score_list = []
         final_index = 0
         try:
             for index in range(len(rule_list)):
                 total_score = action_count_score_list[index] * ACTION_COUNT_SCORE_WEIGHT + \
-                                average_length_score_list[index] * AVERAGE_LENGTH_SCORE_WEIGHT + \
-                                llm_rate[index][0] * ACCURACY_SCORE_WEIGHT + \
-                                llm_rate[index][1] * GENERALIZABILITY_SCORE_WEIGHT + \
-                                llm_rate[index][2] * ROBUSTNESS_SCORE_WEIGHT
+                    average_length_score_list[index] * AVERAGE_LENGTH_SCORE_WEIGHT + \
+                    llm_rate[index][0] * ACCURACY_SCORE_WEIGHT + \
+                    llm_rate[index][1] * GENERALIZABILITY_SCORE_WEIGHT + \
+                    llm_rate[index][2] * ROBUSTNESS_SCORE_WEIGHT
                 total_score_list.append(total_score)
-            print(total_score_list)
+            logger.info(f"Total score list: {total_score_list}\nllm_rate: {llm_rate}")
             final_index = total_score_list.index(max(total_score_list))
         except:
-            import traceback
-            traceback.print_exc()
-            print(llm_rate)
+            logger.error(traceback.format_exc())
 
-        print(f"Final index: {final_index}")
+        logger.info(f"Final index: {final_index}")
         return rule_list[final_index]
 
-    def rule_synthesis(self, 
+    def rule_synthesis(self,
                        website_name: str,
-                       seed_html_set: list[str], 
-                       instruction: str, 
-                       ground_truth = None,
-                       max_token = 8000,
+                       seed_html_set: list[str],
+                       instruction: str,
+                       ground_truth=None,
+                       max_token=8000,
                        per_page_repeat_time=1):
         rule_list = []
 
         # Collect a rule from each seed webpage
         if ground_truth:
             for html_content, gt in zip(seed_html_set, ground_truth):
-                page_rule = self.generate_sequence(instruction, html_content, gt, max_token=max_token)
+                page_rule = self.generate_sequence(
+                    instruction, html_content, gt, max_token=max_token)
                 rule_list.append(page_rule)
         else:
-            for html_content in seed_html_set:
-                inverted_html_content = self.inverted_search(html_content, instruction)
-                with open('inverted_html.txt', mode='w+', encoding='utf8') as f:
+            for (seed_index, html_content) in enumerate(seed_html_set):
+                inverted_html_content = self.inverted_search(
+                    html_content, instruction)
+                with open('inverted_html.txt', mode='w+', encoding='utf8', errors='ignore') as f:
                     f.write(inverted_html_content)
                 if not inverted_html_content:
                     return []
-                page_rule = self.generate_sequence(instruction, inverted_html_content, max_token=max_token)
+                page_rule = self.generate_sequence(
+                    instruction, inverted_html_content, max_token=max_token, seed_index=seed_index)
                 rule_list.append(page_rule)
 
-        #rule_list = list(set(rule_list))
+        # rule_list = list(set(rule_list))
         try:
-            print(rule_list)
+            logger.info(rule_list)
         except:
-            pass
+            logger.error('print error')
 
         if len(seed_html_set) > 1:
             valid_answer = False
@@ -411,25 +512,27 @@ class StepbackExtraCrawler:
                 return []
             extract_result = []
             for rule in rule_list:
-                sub_extract_result = {'rule':rule, 'extracted result':[]}
+                sub_extract_result = {'rule': rule, 'extracted result': []}
                 for html_content in seed_html_set:
-                    sub_extract_result['extracted result'].append(self.extract_with_sequence(html_content, rule))
+                    sub_extract_result['extracted result'].append(
+                        self.extract_with_sequence(html_content, rule))
                 extract_result.append(sub_extract_result)
-            
+
             try:
-                print('+' * 100)
-                print(f"Systhesis rule for the website {website_name}")
-                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+                logger.info('+' * 100)
+                logger.info(f"Systhesis rule for the website {website_name}")
+                logger.info(json.dumps(extract_result,
+                            ensure_ascii=False, indent=4))
             except:
-                pass
+                logger.error('print error')
 
             return self.rate_and_perferred(instruction, extract_result, rule_list)
         else:
             return rule_list[0]
-        
-    def extract_with_xpath(self, 
-                           html_content:str, 
-                           xpath:str) -> list[str]:
+
+    def extract_with_xpath(self,
+                           html_content: str,
+                           xpath: str) -> list[str]:
         """Xpath Parser
 
         Args:
@@ -438,21 +541,40 @@ class StepbackExtraCrawler:
 
         Returns:
             list[str]: result extracted by xpath
-        """
+        """ 
+        @lru_cache(maxsize=512)
+        def get_new_xpath(xpath):
+            xpath_new_list = []
+            for x in xpath.split('|'):
+                # remove the last index in the xpath.
+                x_new = re.sub(r'\[\d+\]', '', x)
+                if x_new.endswith('text()'):
+                    xpath_new_list.append(x)
+                else:
+                    xpath_new_list.append(x + '/text()')
+            xpath_new = '|'.join(xpath_new_list)
+            return xpath_new
+
         if self.is_simplify:
-            html_content = simplify_html(html_content)
+            html_content = simplify_html(html_content).encode('utf-8')
         try:
             if xpath.strip():
-                ele = etree.HTML(html_content) # type: ignore
-                return [item.strip() if isinstance(item, str) else item.text.strip() for item in ele.xpath(xpath)]
+                root = etree.HTML(html_content) # type: ignore
+                res_list = []
+                res_list = [i.strip() for i in root.xpath(get_new_xpath(xpath))]
+                return res_list
             else:
                 return []
+        except Exception as e:
+            logger.error(e)
+            print(xpath)
+            return []
         except:
             return []
-        
+
     def extract_with_sequence(self,
-                              html_content:str,
-                              sequence:str):
+                              html_content: str,
+                              sequence: str):
         if self.is_simplify:
             html_content = simplify_html(html_content)
         if sequence == []:
@@ -462,31 +584,34 @@ class StepbackExtraCrawler:
             for index, xpath in enumerate(sequence):
                 if index != tot_len - 1:
                     try:
-                        html_content = find_common_ancestor(html_content, xpath)
+                        html_content = find_common_ancestor(
+                            html_content, xpath)
                     except:
                         pass
                 else:
                     return self.extract_with_xpath(html_content, xpath)
-    
-    def inverted_search(self, html_content:str, instruction:str):
+
+    def inverted_search(self, html_content: str, instruction: str):
         MAX_TRY_TIMES = 2
         if self.is_simplify:
             html_content = simplify_html(html_content)
 
         query = f'{role_prompt}\n{inverted_prompt.format(instruction, get_pure_text(html_content))}'
-        with open('inverted.txt', mode='w+', encoding='utf8') as f:
+        with open('inverted.txt', mode='w+', encoding='utf8', errors='ignore') as f:
             f.write(query)
 
         for _ in range(MAX_TRY_TIMES):
             try:
-                res = self.request_parse(query, ['thought', 'item', 'neighbors'])
-                print(res)
+                res = self.request_parse(
+                    query, ['thought', 'item', 'neighbors'])
+                logger.info(res)
                 item = res['item']
-                neighbors = eval(res['neighbors']) if isinstance(res['neighbors'], str) else res['neighbors']
+                neighbors = eval(res['neighbors']) if isinstance(
+                    res['neighbors'], str) else res['neighbors']
                 res = simplify_html_inverted(item, neighbors, html_content)
                 if res is not None:
                     return res
             except Exception as e:
-                print(e)
+                logger.error(traceback.format_exc())
         else:
             return ''

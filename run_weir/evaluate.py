@@ -4,6 +4,7 @@ import glob, os, re
 from collections import defaultdict
 from schema import SCHEMA
 import argparse 
+import csv
 
 parser = argparse.ArgumentParser()
 
@@ -18,19 +19,23 @@ model = args.model
 # PATTERN = 'autocrawler'
 # model = 'GPT4mini'
 
-GROUND_TRUTH_HOME = 'data/ex_swde/sourceCode/groundtruth'
-OUTPUT_HOME = f'dataset/ex_swde/{model}/{PATTERN}'
+GROUND_TRUTH_HOME = 'data/weir/sourceCode/groundtruth'
+OUTPUT_HOME = f'dataset/weir/{model}/{PATTERN}'
 
-def load_file(filename, field):
+def load_file(filename, item_list): 
     result_dict = {}
     with open(filename, 'r', encoding='utf8') as f:
-        data = json.load(f)
-        for key, value in data.items():
-            field_id = key.replace('.htm', '')
-            if field in value:
-                result_dict[field_id] = value[field]
-            else:
-                result_dict[field_id] = []
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    for field in item_list:
+        field_dict = {}
+        for row in rows:
+            field_id = (row.get('url') or row.get('Url')) \
+                        .split('/')[-1].replace('.html', '')
+            if field_id:
+                field_dict[field_id] = [row.get(field, '')]
+        result_dict[field] = field_dict
 
     return result_dict
 
@@ -61,6 +66,7 @@ def normalize(text):
     text = text.replace('&frac12;', '½')
     text = text.replace('  ', ' ')
     text = re.sub(r"\s+", "", text)
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
     return text.strip()
 
 def normalize_list(text_list):
@@ -97,9 +103,8 @@ for field in SCHEMA.keys():
         result_dict[field][website_name] = {}
         ground_truth = {}
         
-        for item in SCHEMA[field]:
-            filename = os.path.join(GROUND_TRUTH_HOME, f'{field}.json')
-            ground_truth[item] = load_file(filename, item)
+        filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}.csv')
+        ground_truth = load_file(filename, SCHEMA[field])
         
         with open(website_path, 'r', encoding='utf8') as f:
             predict_result = json.load(f)
@@ -110,10 +115,13 @@ for field in SCHEMA.keys():
 
         for result in predict_result:
             # page_index = result['page'].split('/')[-1].replace('.htm', '')
-            page_index = result['page'].split('\\')[-1].replace('.htm', '')
+            page_index = result['page'].split('\\')[-1].replace('.html', '')
             result_dict[field][website_name][page_index] = {}
             for item in SCHEMA[field]:
                 #print(result)
+                if ground_truth[item].get(page_index) is None:
+                    print(f'{website_name} {page_index}')
+                    continue
                 result_dict[field][website_name][page_index][item] = {}
                 pred = set(normalize_list(result[item]))
                 gt = set(normalize_list(ground_truth[item][page_index]))

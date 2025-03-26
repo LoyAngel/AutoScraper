@@ -1,11 +1,14 @@
 import json
-import glob, os, re
+import glob
+import os
+import re
 from collections import defaultdict
-import argparse 
+import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
+parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler',
+                    'autocrawler_extra'], help='Which type of crawler generation agent to use.')
 parser.add_argument('--model', type=str, help='Backbone model')
 
 SCHEMA = {
@@ -24,25 +27,27 @@ print(args)
 
 PATTERN = args.pattern
 model = args.model
-# PATTERN = 'autocrawler'
-# model = 'GPT4mini'
+# PATTERN = 'autocrawler_extra'
+# model = 'Claude3Haiku'
 
 GROUND_TRUTH_HOME = 'data/swde/sourceCode/groundtruth'
 OUTPUT_HOME = f'dataset/swde/{model}/{PATTERN}'
+
 
 def load_file(filename):
     result_dict = {}
     with open(filename, 'r', encoding='utf8') as f:
         for index, line in enumerate(f.readlines()):
-            if index <= 1: 
+            if index <= 1:
                 continue
             item_list = line.strip().split('\t')
-            #print(item_list)
-            result_dict[item_list[0]] = item_list[2 : 2+int(item_list[1])]
+            # print(item_list)
+            result_dict[item_list[0]] = item_list[2: 2+int(item_list[1])]
     return result_dict
 
+
 def normalize(text):
-    #print(text_list)
+    # print(text_list)
     text = text.replace('&lt;', '<')
     text = text.replace('&gt;', '>')
     text = text.replace('&amp;', '&')
@@ -54,24 +59,26 @@ def normalize(text):
     text = text.replace('&#039;', "'")
     text = text.replace('&#34;', '"')
     text = text.replace('&reg;', '®')
-    text = text.replace('&rsquo;','’')
-    text = text.replace('&#8226;','•')
-    text = text.replace('&ndash;','–')
+    text = text.replace('&rsquo;', '’')
+    text = text.replace('&#8226;', '•')
+    text = text.replace('&ndash;', '–')
     text = text.replace('&#x27;', "'")
     text = text.replace('&#40;', '(')
     text = text.replace('&#41;', ')')
-    text = text.replace('&#47;','/')
-    text = text.replace('&#43;','+')
-    text = text.replace('&#035;','#')
+    text = text.replace('&#47;', '/')
+    text = text.replace('&#43;', '+')
+    text = text.replace('&#035;', '#')
     text = text.replace('&#38;', '&')
     text = text.replace('&eacute;', 'é')
     text = text.replace('&frac12;', '½')
-    text = text.replace('  ', ' ')
     text = re.sub(r"\s+", "", text)
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
     return text.strip()
+
 
 def normalize_list(text_list):
     return [normalize(text) for text in text_list if text and normalize(text)]
+
 
 result_dict = {}
 result_overall = {}
@@ -91,7 +98,7 @@ result_summary = {
 for field in SCHEMA.keys():
     result_dict[field] = {}
     result_overall[field] = {}
-    weblist = glob.glob(os.path.join(OUTPUT_HOME, field, '*'))
+    weblist = glob.glob(os.path.join(OUTPUT_HOME, field, '*.json'))
     weblist = [(os.path.normpath(web)).replace('\\', '/') for web in weblist]
 
     for website_path in weblist:
@@ -104,27 +111,29 @@ for field in SCHEMA.keys():
         result_dict[field][website_name] = {}
         ground_truth = {}
         for item in SCHEMA[field]:
-            filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}-{item}.txt')
+            filename = os.path.join(
+                GROUND_TRUTH_HOME, field, f'{website_name}-{item}.txt')
             ground_truth[item] = load_file(filename)
-        
+
         with open(website_path, 'r', encoding='utf8') as f:
             predict_result = json.load(f)
-        #print(predict_result)
+        # print(predict_result)
         tp = defaultdict(int)
         tn = defaultdict(int)
         fp = defaultdict(int)
-
         for result in predict_result:
             # page_index = result['page'].split('/')[-1].replace('.htm', '')
             page_index = result['page'].split('\\')[-1].replace('.htm', '')
             result_dict[field][website_name][page_index] = {}
             for item in SCHEMA[field]:
-                #print(result)
+                # print(result)
                 result_dict[field][website_name][page_index][item] = {}
                 pred = set(normalize_list(result[item]))
                 gt = set(normalize_list(ground_truth[item][page_index]))
-                result_dict[field][website_name][page_index][item]['pred'] = list(pred)
-                result_dict[field][website_name][page_index][item]['ground_truth'] = list(gt)
+                result_dict[field][website_name][page_index][item]['pred'] = list(
+                    pred)
+                result_dict[field][website_name][page_index][item]['ground_truth'] = list(
+                    gt)
 
                 tp[item] += len(pred & gt)
                 fp[item] += len(pred - gt)
@@ -143,7 +152,7 @@ for field in SCHEMA.keys():
                 'FP': fp[item],
                 'TN': tn[item]
             }
-            #print(p)
+            # print(p)
             if round(f1, 4) == 1.00:
                 result_summary['Fully correct'] += 1
             elif (round(p, 4) == 1.00) and (round(r, 4) != 0.00):
@@ -163,7 +172,8 @@ for field in SCHEMA.keys():
 
 for key in result_summary.keys():
     if key != 'Total':
-        result_summary[key] = round(result_summary[key] / result_summary['Total'], 4)
+        result_summary[key] = round(
+            result_summary[key] / result_summary['Total'], 4)
 
 print(json.dumps(result_summary, indent=4))
 with open(os.path.join(OUTPUT_HOME, 'result.json'), 'w', encoding='utf8') as f:

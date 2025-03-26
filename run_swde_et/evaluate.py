@@ -20,18 +20,21 @@ model = args.model
 GROUND_TRUTH_HOME = 'data/ex_swde/sourceCode/groundtruth'
 OUTPUT_HOME = f'dataset/ex_swde/{model}/{PATTERN}'
 
-def load_file(filename, field):
+def load_file(filename, items):
     result_dict = {}
     with open(filename, 'r', encoding='utf8') as f:
         data = json.load(f)
-        for key, value in data.items():
-            field_id = key.replace('.htm', '')
-            if field in value:
-                result_dict[field_id] = value[field]
-            else:
-                result_dict[field_id] = []
-
+        for field in items:
+            field_dict = {}
+            for key, value in data.items():
+                field_id = key.replace('.htm', '')
+                if field in value:
+                    field_dict[field_id] = value[field]
+                else:
+                    field_dict[field_id] = []
+            result_dict[field] = field_dict
     return result_dict
+
 
 def normalize(text):
     #print(text_list)
@@ -58,8 +61,8 @@ def normalize(text):
     text = text.replace('&#38;', '&')
     text = text.replace('&eacute;', 'é')
     text = text.replace('&frac12;', '½')
-    text = text.replace('  ', ' ')
     text = re.sub(r"\s+", "", text)
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
     return text.strip()
 
 def normalize_list(text_list):
@@ -94,11 +97,9 @@ for field in SCHEMA.keys():
         print(website_path)
         website_name = website_path.split('/')[-1].replace('.json', '')
         result_dict[field][website_name] = {}
-        ground_truth = {}
         
-        for item in SCHEMA[field]:
-            filename = os.path.join(GROUND_TRUTH_HOME, f'{field}.json')
-            ground_truth[item] = load_file(filename, item)
+        filename = os.path.join(GROUND_TRUTH_HOME, f'{field}.json')
+        ground_truth = load_file(filename, SCHEMA[field])
         
         with open(website_path, 'r', encoding='utf8') as f:
             predict_result = json.load(f)

@@ -1,9 +1,12 @@
 import json, re
+import logging
 from lxml import etree, html
 from utils.html_utils import simplify_html, find_common_ancestor, get_absolute_xpath
 from utils.step import domlm_parse
 from bs4 import BeautifulSoup
+from functools import lru_cache
 
+logger = logging.getLogger('crawler')
 role_prompt = '''Suppose you're a web parser that is good at reading and understanding the HTML code and can give clear executable code on the brower.'''
 crawler_prompt = '''Please read the following HTML code, and then return an Xpath that can recognize the element in the HTML matching the instruction below. 
 
@@ -93,7 +96,7 @@ class StepbackCrawler:
                  simplify=True,
                  verbose=True,
                  api=None,
-                 error_max_times=15):
+                 error_max_times=5):
 
         if api == None:
             raise ValueError("No api has been assigned!!")
@@ -130,7 +133,7 @@ class StepbackCrawler:
             except:
                 pass
         if target:
-            #print(res)
+            #logger.info(res)
             return res
         else:
             return {key:"" for key in keys}
@@ -148,7 +151,7 @@ class StepbackCrawler:
                 res = self.request_parse(query, ['thought', 'xpath'])
             else:
                 query = f'{role_prompt}\n{crawler_prompt.format(instruction, html_content)}'
-                with open('crawler.txt', mode='w+', encoding='utf8') as f:
+                with open('crawler.txt', mode='w+', encoding='utf8', errors='ignore') as f:
                     f.write(query)
                 res = self.request_parse(query, ['thought', 'value', 'xpath'])
         
@@ -158,12 +161,14 @@ class StepbackCrawler:
         
 
             try:
-                print('-' * 50)
-                print(value)
-                print(results)
-                print(xpath)
+                logger.info(
+                    "-" * 50 + 
+                    f"\nvalue: {value}" +
+                    f"\nresults: {results}" +
+                    f"\nxpath: {xpath}"
+                )
             except Exception as e:
-                print("pass")
+                logger.error("print error")
 
             if value == '':
                 return action_sequence
@@ -173,9 +178,9 @@ class StepbackCrawler:
             res = self.request_parse(query, ['thought', 'judgement'])
 
             try:
-                print(json.dumps(res, ensure_ascii=False, indent=4))
+                logger.info(json.dumps(res, ensure_ascii=False, indent=4))
             except:
-                pass
+                logger.error("print error")
             if res['judgement'].lower() == 'yes':
                 action_sequence.append(xpath)
                 return action_sequence
@@ -207,10 +212,10 @@ class StepbackCrawler:
     def generate_sequence(self, instruction, html_content, ground_truth = None, max_token=8000):
         if self.is_simplify:
             html_content = simplify_html(html_content)
-        #print(html_content)
+        #logger.info(html_content)
         soup = BeautifulSoup(html_content, 'html.parser')
         subtree_list = domlm_parse(soup, max_token)
-        print('Page split:', len(subtree_list))
+        logger.info(f'Page split: {len(subtree_list)}')
         rule_list = []
         for sub_html in subtree_list:
             page_rule = self.generate_sequence_html(instruction, sub_html, ground_truth)
@@ -229,9 +234,9 @@ class StepbackCrawler:
                 sub_extract_result['extracted result'] = self.extract_with_sequence(html_content, rule)
                 extract_result.append(sub_extract_result)
             try:
-                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+                logger.info(json.dumps(extract_result, ensure_ascii=False, indent=4))
             except:
-                print("pass")
+                logger.error("pass")
 
             query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
             res = self.request_parse(query, ['thought', 'number'])
@@ -263,9 +268,9 @@ class StepbackCrawler:
 
         #rule_list = list(set(rule_list))
         try:
-            print(rule_list)
+            logger.info(rule_list)
         except:
-                print("pass")
+            logger.error("pass")
         if len(seed_html_set) > 1:
             valid_answer = False
             for rule in rule_list:
@@ -279,12 +284,12 @@ class StepbackCrawler:
                 for html_content in seed_html_set:
                     sub_extract_result['extracted result'].append(self.extract_with_sequence(html_content, rule))
                 extract_result.append(sub_extract_result)
-            print('+' * 100)
-            print(f"Systhesis rule for the website {website_name}")
+            logger.info('+' * 100)
+            logger.info(f"Systhesis rule for the website {website_name}")
             try:
-                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+                logger.info(json.dumps(extract_result, ensure_ascii=False, indent=4))
             except:
-                print('pass')
+                logger.error('pass')
             query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
             res = self.request_parse(query, ['thought', 'number'])
             try:
@@ -316,9 +321,9 @@ class StepbackCrawler:
 
         #rule_list = list(set(rule_list))
         try:
-            print(rule_list)
+            logger.info(rule_list)
         except:
-            print("pass")
+            logger.error("print error")
         for webnum in range(2, len(seed_html_set) + 1):
             valid_answer = False
             for rule in rule_list[:webnum]:
@@ -333,11 +338,10 @@ class StepbackCrawler:
                     sub_extract_result['extracted result'].append(self.extract_with_sequence(html_content, rule))
                 extract_result.append(sub_extract_result)
             try:
-                print('+' * 100)
-                print(f"Systhesis rule for the website {website_name}")
-                print(json.dumps(extract_result, ensure_ascii=False, indent=4))
+                logger.info('+' * 100)
+                logger.info(json.dumps(extract_result, ensure_ascii=False, indent=4))
             except:
-                print("pass")
+                logger.error("print er")
             query = synthesis_prompt.format(instruction, json.dumps(extract_result, indent=4))
             res = self.request_parse(query, ['thought', 'number'])
             try:
@@ -358,15 +362,32 @@ class StepbackCrawler:
         Returns:
             list[str]: result extracted by xpath
         """
+        @lru_cache(maxsize=512)
+        def get_new_xpath(xpath):
+            xpath_new_list = []
+            for x in xpath.split('|'):
+                # remove the last index in the xpath.
+                x_new = re.sub(r'\[\d+\]', '', x)
+                if x_new.endswith('text()'):
+                    xpath_new_list.append(x)
+                else:
+                    xpath_new_list.append(x + '/text()')
+            xpath_new = '|'.join(xpath_new_list)
+            return xpath_new
+
         if self.is_simplify:
-            html_content = simplify_html(html_content)
+            html_content = simplify_html(html_content).encode('utf-8')
         try:
             if xpath.strip():
-                ele = etree.HTML(html_content) # type: ignore
-                return [item.strip() if isinstance(item, str) else item.text.strip() for item in ele.xpath(xpath)]
+                root = etree.HTML(html_content) # type: ignore
+                res_list = []
+                res_list = [i.strip() for i in root.xpath(get_new_xpath(xpath))]
+                return res_list
             else:
                 return []
-        except:
+        except Exception as e:
+            logger.error(e)
+            logger.error(xpath)
             return []
         
     def extract_with_sequence(self,
