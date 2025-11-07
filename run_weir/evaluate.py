@@ -6,18 +6,18 @@ from schema import SCHEMA
 import argparse 
 import csv
 
-parser = argparse.ArgumentParser()
+# parser = argparse.ArgumentParser()
 
-parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
-parser.add_argument('--model', type=str, help='Backbone model')
+# parser.add_argument('--pattern', type=str, choices=['cot', 'reflexion', 'autocrawler', 'autocrawler_extra'], help='Which type of crawler generation agent to use.')
+# parser.add_argument('--model', type=str, help='Backbone model')
 
-args = parser.parse_args()
-print(args)
+# args = parser.parse_args()
+# print(args)
 
-PATTERN = args.pattern
-model = args.model
-# PATTERN = 'autocrawler'
-# model = 'GPT4mini'
+# PATTERN = args.pattern
+# model = args.model
+PATTERN = 'autocrawler'
+model = 'Claude3Haiku'
 
 GROUND_TRUTH_HOME = 'data/weir/sourceCode/groundtruth'
 OUTPUT_HOME = f'dataset/weir/{model}/{PATTERN}'
@@ -103,6 +103,13 @@ for field in SCHEMA.keys():
         result_dict[field][website_name] = {}
         ground_truth = {}
         
+        xpath_file_name = os.path.join(OUTPUT_HOME, field, f'{website_name}_{PATTERN}.json')
+        xpath_file_name = xpath_file_name.replace('\\', '/')
+        xpath_dict = {}
+        if os.path.exists(xpath_file_name):
+            with open(xpath_file_name, 'r', encoding='utf8') as f:
+                xpath_dict = json.load(f)
+
         filename = os.path.join(GROUND_TRUTH_HOME, field, f'{website_name}.csv')
         ground_truth = load_file(filename, SCHEMA[field])
         
@@ -136,6 +143,9 @@ for field in SCHEMA.keys():
         for item in SCHEMA[field]:
             p = (tp[item] + 1e-12) / (fp[item] + tp[item] + 1e-12)
             r = (tp[item] + 1e-12) / (tp[item] + tn[item] + 1e-12)
+            # 做一个特判，如果xpath[item]有值，说明已经做出了预测，此时会有(p=1, r=0, f1=0)的情况，但是实际上p不应该为1
+            if xpath_dict.get(item) and round(1, 2) == 1.00 and round(r, 2) == 0.00:
+                p = 0.0
             f1 = (2 * p * r) / (p + r + 1e-12)
             result_overall[field][website_name][item] = {
                 'Precision': round(p, 4),
@@ -168,11 +178,11 @@ for key in result_summary.keys():
         result_summary[key] = round(result_summary[key] / result_summary['Total'], 4)
 
 print(json.dumps(result_summary, indent=4))
-with open(os.path.join(OUTPUT_HOME, 'result.json'), 'w', encoding='utf8') as f:
+with open(os.path.join(OUTPUT_HOME, 'result_exc.json'), 'w', encoding='utf8') as f:
     json.dump(result_dict, f, ensure_ascii=False, indent=4)
 
-with open(os.path.join(OUTPUT_HOME, 'result_overall.json'), 'w', encoding='utf8') as f:
+with open(os.path.join(OUTPUT_HOME, 'result_overall_exc.json'), 'w', encoding='utf8') as f:
     json.dump(result_overall, f, ensure_ascii=False, indent=4)
 
-with open(os.path.join(OUTPUT_HOME, 'result_summary.json'), 'w', encoding='utf8') as f:
+with open(os.path.join(OUTPUT_HOME, 'result_summary_exc.json'), 'w', encoding='utf8') as f:
     json.dump(result_summary, f, ensure_ascii=False, indent=4)

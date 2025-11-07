@@ -168,13 +168,18 @@ Please rate every action sequence in the following Json format:
 '''
 
 inverted_prompt = '''You're a perfect text reader which is good at understanding the list texts content. The list texts are extracted from the HTML code. Please recognize the best item in the list text content that matches the instruction below.
+Hint:
+1. If there is multiple values that match the instruction, please choose the first one.
+2. If there is no data that match the instruction, keep the item blank, and the neighbors should be blank as well.
+3. If the item is the first or last value in the list, leave one "" blank in the neighbors list.
+4. Replace the double quotions with single quotation if there is any in the text content.
 
 Instruction: {0}
 Please output in the following Json format:
 {{
     "thought": "", # a brief thought of how to confirm the value
-    "item": "" # the full item picked up from the text content that match the instruction, if there is no data, keep it blank; if there are multiple values, pick the first appeared one
-    "neighbors": ["", ""] # a list containing the two nearest values to the best value in the list, if it's last or first value, leave one "" blank
+    "item": "" # the full item picked up from the text content that match the instruction
+    "neighbors": ["", ""] # a list containing the two nearest values to the best value in the list
 }}
 
 Here's the dict text content:
@@ -225,8 +230,7 @@ class StepbackExtraCrawler:
             matches = re.findall(pattern, response, re.DOTALL)
             try:
                 for match in matches:
-                    cleaned_match = re.sub(r'\\', r'\\\\', match)
-                    res = json.loads(cleaned_match, strict=False) # type: ignore
+                    res = json.loads(match, strict=False) # type: ignore
                     for key in keys:
                         assert res[key]
                     target = True

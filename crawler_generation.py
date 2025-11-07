@@ -53,7 +53,7 @@ model = 'GPT4mini'
 dataset = 'news'
 num_seed_website = 3
 overwrite = False
-max_token = 30000
+max_token = 50000
 OUTPUT_HOME = f'dataset/{dataset}/{model}'
 # OUTPUT_HOME = f'dataset/{dataset}/{save_name}'
 
